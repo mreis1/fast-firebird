@@ -16,6 +16,7 @@
     "declarationMap": true,
     "sourceMap": true,
     "isolatedModules": true,
+    "resolveJsonModule": true,
     "verbatimModuleSyntax": true
   }
 }

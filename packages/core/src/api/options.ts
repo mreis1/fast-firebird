@@ -1,0 +1,99 @@
+import type { FirebirdTranscodeAdapter } from '../charset/decoder.js';
+import { WireCryptLevel } from '../protocol/constants.js';
+
+export type WireCryptOption = 'enabled' | 'disabled' | 'required';
+
+export interface FirebirdConnectionOptions {
+  host?: string;
+  port?: number;
+  database: string;
+  user?: string;
+  password?: string;
+
+  role?: string | null;
+  /** Connection charset (lc_ctype). Default UTF8. */
+  charset?: string;
+  /** Compatibility alias for charset. */
+  encoding?: string;
+
+  lowercaseKeys?: boolean;
+  pageSize?: number;
+
+  connectTimeoutMs?: number;
+
+  wireCrypt?: WireCryptOption;
+  authPlugin?: 'Srp256' | 'Srp' | 'auto';
+
+  blobAsText?: boolean;
+  blobWriteChunkSize?: number;
+  blobReadChunkSize?: number;
+  /** Rows requested per fetch round trip. */
+  fetchSize?: number;
+
+  charsetNoneEncoding?: string;
+  transcodeAdapter?: FirebirdTranscodeAdapter;
+  charsetOverrides?: Record<string, string>;
+}
+
+/** Legacy node-firebird option names accepted at the boundary. */
+export interface LegacyOptionAliases {
+  lowercase_keys?: boolean;
+  retryConnectionInterval?: number;
+  blobChunkSize?: number;
+  connectTimeout?: number;
+  pluginName?: string;
+}
+
+export interface ResolvedOptions {
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  password: string;
+  role: string | null;
+  charset: string;
+  lowercaseKeys: boolean;
+  pageSize: number;
+  connectTimeoutMs: number;
+  wireCrypt: WireCryptLevel;
+  authPlugin: string | undefined;
+  blobAsText: boolean;
+  blobWriteChunkSize: number;
+  blobReadChunkSize: number;
+  fetchSize: number;
+  charsetNoneEncoding: string | undefined;
+  transcodeAdapter: FirebirdTranscodeAdapter | undefined;
+  charsetOverrides: Record<string, string> | undefined;
+}
+
+const WIRE_CRYPT_MAP: Record<WireCryptOption, WireCryptLevel> = {
+  disabled: WireCryptLevel.disabled,
+  enabled: WireCryptLevel.enabled,
+  required: WireCryptLevel.required,
+};
+
+/** Normalizes user options (incl. legacy aliases) into internal options. */
+export function resolveOptions(raw: FirebirdConnectionOptions & LegacyOptionAliases): ResolvedOptions {
+  const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+  return {
+    host: raw.host ?? '127.0.0.1',
+    port: raw.port ?? 3050,
+    database: raw.database,
+    user: raw.user ?? 'SYSDBA',
+    password: raw.password ?? 'masterkey',
+    role: raw.role ?? null,
+    charset: (raw.charset ?? raw.encoding ?? 'UTF8').toUpperCase(),
+    lowercaseKeys: raw.lowercaseKeys ?? raw.lowercase_keys ?? false,
+    pageSize: raw.pageSize ?? 8192,
+    connectTimeoutMs: raw.connectTimeoutMs ?? raw.connectTimeout ?? 10_000,
+    wireCrypt: WIRE_CRYPT_MAP[raw.wireCrypt ?? 'enabled'],
+    authPlugin: raw.authPlugin === 'auto' ? undefined : (raw.authPlugin ?? (raw.pluginName as string | undefined)),
+    blobAsText: raw.blobAsText ?? false,
+    blobWriteChunkSize: clamp(raw.blobWriteChunkSize ?? raw.blobChunkSize ?? 16_384, 1, 65_535),
+    blobReadChunkSize: clamp(raw.blobReadChunkSize ?? 65_535, 1, 65_535),
+    fetchSize: clamp(raw.fetchSize ?? 400, 1, 65_535),
+    charsetNoneEncoding: raw.charsetNoneEncoding,
+    transcodeAdapter: raw.transcodeAdapter,
+    charsetOverrides: raw.charsetOverrides,
+  };
+}

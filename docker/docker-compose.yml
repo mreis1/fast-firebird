@@ -14,6 +14,8 @@ x-fb-common: &fb-common
     FIREBIRD_ROOT_PASSWORD: masterkey
     FIREBIRD_DATABASE: test.fdb
     FIREBIRD_DATABASE_DEFAULT_CHARSET: UTF8
+    # Allow both encrypted and plaintext wire so tests can exercise each mode.
+    FIREBIRD_CONF_WireCrypt: Enabled
   healthcheck:
     test: ["CMD", "bash", "-c", "</dev/tcp/127.0.0.1/3050"]
     interval: 2s
