@@ -20,28 +20,35 @@ only when API surface stabilizes (avoid premature package fragmentation).
 
 ## Milestones
 
-### M0 — Foundation (in progress)
+### M0 — Foundation ✅ (2026-07-08/09)
 - [x] Monorepo scaffold (pnpm, TS strict, vitest, tsup)
 - [x] Reference sources cloned into `references/` (gitignored): node-firebird, node-firebird2,
       rsfbclient, jaybird, python3-driver, firebird core
-- [ ] Protocol research notes in `plans/research/` (agents running)
+- [x] Protocol research notes in `plans/research/` (3 documents)
 - [x] Docker safety rules (`plans/docker-safety.md`)
 
-### M1 — Connect & authenticate (target: first)
-- [ ] TCP transport with buffered reader/writer, connect timeout
-- [ ] XDR encode/decode primitives
-- [ ] op_connect → op_accept_data handshake, protocol 13+ (FB3+), offer up to 16/17
-- [ ] SRP (Srp256 default, Srp fallback, Legacy_Auth optional) via node:crypto
-- [ ] op_attach with DPB builder; op_detach; op_create (database)
-- [ ] Error mapping: status vector → FirebirdError classes
+### M1 — Connect & authenticate ✅ (2026-07-09)
+- [x] TCP transport with buffered reader/writer, connect timeout
+- [x] XDR encode/decode primitives
+- [x] op_connect → op_accept_data/op_cond_accept handshake, protocols 13–16 offered
+- [x] SRP (Srp256 default, Srp fallback) via node:crypto — incl. FB3 attach-time
+      auth continuation (crypt-disabled path). Legacy_Auth: not yet.
+- [x] Arc4 wire encryption (pure-TS RC4; OpenSSL 3 dropped legacy rc4)
+- [x] op_attach/op_create/op_detach/op_drop_database with DPB builder
+- [x] Error mapping: full gds message table (2539 msgs generated from FB source) + SQLSTATE
 
-### M2 — Queries
-- [ ] Transactions (TPB builder, commit/rollback/retaining)
-- [ ] allocate/prepare/execute/fetch with SQL-info metadata parsing
-- [ ] BLR parameter message construction
-- [ ] Type codec: all FB3 types; FB4 int128/decfloat/tz types
-- [ ] Charset layer incl. `CHARSET NONE` + `charsetNoneEncoding` + transcodeAdapter
-- [ ] High-level API: `connect()`, `query()`, `execute()`, `transaction()`
+### M2 — Queries ✅ core (2026-07-09)
+- [x] Transactions (TPB builder, commit/rollback/retaining, isolation presets)
+- [x] allocate+prepare pipelined (1 RT), execute, batched fetch, SQL-info parsing
+- [x] BLR parameter messages (value-driven) + output BLR from describe
+- [x] Type codec: all FB3 types + INT64/INT128, TZ types (zone discarded for now);
+      DECFLOAT decodes to raw bytes (TODO proper decimal)
+- [x] Charset layer incl. `CHARSET NONE` + `charsetNoneEncoding` + transcodeAdapter
+      + charsetOverrides — verified € round-trip on FB3/4/5
+- [x] Blob read/write (eager materialization; subtype 1 → string)
+- [x] High-level API: `connect()`, `query()`, `run()`, `execute()`, `transaction()`
+- [ ] Statement cache / reusable PreparedStatement objects (M3)
+- [ ] op_execute affected-counts piggyback avoidance (extra RT today for DML)
 
 ### M3 — Security & performance
 - [ ] WireCrypt (Arc4/ChaCha) — Arc4 first
