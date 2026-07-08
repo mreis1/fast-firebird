@@ -1,0 +1,61 @@
+# Isolated Firebird test matrix for fast-firebird.
+# ALWAYS run with an explicit project name so nothing collides with other
+# Docker resources on this machine:
+#   docker compose -p fast-firebird-test -f docker/docker-compose.yml up -d --wait
+# Cleanup ONLY via scripts/docker-cleanup.sh (scoped to this project).
+# See plans/docker-safety.md for the full rules.
+
+name: fast-firebird-test
+
+x-fb-common: &fb-common
+  restart: "no"
+  networks: [fast-firebird-test-net]
+  environment: &fb-env
+    FIREBIRD_ROOT_PASSWORD: masterkey
+    FIREBIRD_DATABASE: test.fdb
+    FIREBIRD_DATABASE_DEFAULT_CHARSET: UTF8
+  healthcheck:
+    test: ["CMD", "bash", "-c", "</dev/tcp/127.0.0.1/3050"]
+    interval: 2s
+    timeout: 3s
+    retries: 30
+
+services:
+  fb3:
+    <<: *fb-common
+    image: firebirdsql/firebird:3
+    container_name: fast-firebird-test-fb3
+    ports:
+      - "127.0.0.1:30503:3050"
+    volumes:
+      - fast-firebird-test-fb3-data:/var/lib/firebird/data
+
+  fb4:
+    <<: *fb-common
+    image: firebirdsql/firebird:4
+    container_name: fast-firebird-test-fb4
+    ports:
+      - "127.0.0.1:30504:3050"
+    volumes:
+      - fast-firebird-test-fb4-data:/var/lib/firebird/data
+
+  fb5:
+    <<: *fb-common
+    image: firebirdsql/firebird:5
+    container_name: fast-firebird-test-fb5
+    ports:
+      - "127.0.0.1:30505:3050"
+    volumes:
+      - fast-firebird-test-fb5-data:/var/lib/firebird/data
+
+networks:
+  fast-firebird-test-net:
+    name: fast-firebird-test-net
+
+volumes:
+  fast-firebird-test-fb3-data:
+    name: fast-firebird-test-fb3-data
+  fast-firebird-test-fb4-data:
+    name: fast-firebird-test-fb4-data
+  fast-firebird-test-fb5-data:
+    name: fast-firebird-test-fb5-data

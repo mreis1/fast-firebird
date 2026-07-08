@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+
+# Reference clones for study — not part of this repo
+references/
+
+# Local test databases / docker data
+docker/data/
+*.fdb

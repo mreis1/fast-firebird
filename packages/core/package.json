@@ -1,0 +1,32 @@
+{
+  "name": "@fast-firebird/core",
+  "version": "0.1.0",
+  "description": "Pure-TypeScript Firebird wire-protocol driver for Node.js (Firebird 3/4/5)",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --sourcemap --clean",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run test/unit",
+    "test:integration": "vitest run test/integration --no-file-parallelism"
+  },
+  "dependencies": {
+    "iconv-lite": "^0.6.3"
+  },
+  "devDependencies": {
+    "tsup": "^8.4.0"
+  },
+  "keywords": ["firebird", "sql", "database", "driver", "typescript"]
+}
