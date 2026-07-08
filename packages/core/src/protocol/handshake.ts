@@ -140,6 +140,7 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
 
   const accept = await readAccept(wire);
   const protocolVersion = accept.version & ~FB_PROTOCOL_FLAG & 0xffff;
+  wire.protocolVersion = protocolVersion;
   if (protocolVersion < 13) {
     throw new FirebirdProtocolError(
       `Server negotiated protocol ${protocolVersion}; fast-firebird requires Firebird 3+ (protocol 13)`,

@@ -29,6 +29,8 @@ export interface GenericResponse {
  */
 export class WireConnection {
   readonly writer = new XdrWriter(4096);
+  /** Negotiated protocol version; set by the handshake. */
+  protocolVersion = 13;
   /** Deferred (lazy-send) operations whose responses are pending, FIFO. */
   private deferredResponses = 0;
 
