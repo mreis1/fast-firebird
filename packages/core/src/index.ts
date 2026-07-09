@@ -10,9 +10,16 @@ export {
 } from './script/execute.js';
 export { EventListener, EventChannel } from './events/events.js';
 export { Service, connectService, type ServiceConnectOptions, type ServerInfo } from './services/service.js';
-export type { QueryResult, Row } from './api/session.js';
+export type { QueryResult, Row, QueryOptions } from './api/session.js';
+export { Blob } from './api/blob.js';
 export type { TransactionOptions, IsolationLevel } from './protocol/transaction.js';
 export type { ParamValue } from './protocol/msgcodec.js';
 export type { FirebirdConnectionOptions, LegacyOptionAliases, WireCryptOption } from './api/options.js';
-export { FirebirdError, FirebirdAuthError, FirebirdConnectionError, FirebirdProtocolError } from './api/errors.js';
+export {
+  FirebirdError,
+  FirebirdAuthError,
+  FirebirdConnectionError,
+  FirebirdProtocolError,
+  FirebirdBlobError,
+} from './api/errors.js';
 export type { FirebirdTranscodeAdapter, DecodeContext, EncodeContext } from './charset/decoder.js';

@@ -13,6 +13,7 @@ import { readBlob, writeBlob } from '../protocol/blob.js';
 import { BlobRef, makeColumnReader, type ParamValue } from '../protocol/msgcodec.js';
 import { resolveTextCodec, type TextCodec, type TextCodecOptions } from '../charset/decoder.js';
 import { StatementCache } from './statement-cache.js';
+import { Blob, type BlobScope } from './blob.js';
 import { FirebirdError } from './errors.js';
 import type { SqlVarDesc } from '../protocol/info.js';
 import type { WireConnection } from '../protocol/wire.js';
@@ -26,13 +27,37 @@ export interface QueryResult {
   rowsAffected: number;
 }
 
+/** Per-statement options. */
+export interface QueryOptions {
+  /** 'eager' (default) materializes blobs; 'lazy' returns Blob handles. */
+  blobs?: 'eager' | 'lazy';
+  /** Column names (alias/field, case-insensitive) to omit from rows. */
+  exclude?: string[];
+  /** If set, keep ONLY these columns (applied before `exclude`). */
+  only?: string[];
+}
+
+/** A network-op serializer (Attachment.withLock). */
+export type OpLock = <T>(fn: () => Promise<T>) => Promise<T>;
+
 /** Everything a statement run needs from its attachment. */
 export interface SessionContext {
   wire: WireConnection;
   dbHandle: number;
   opts: ResolvedOptions;
   cache: StatementCache | null;
+  /** Connection op-lock; used to build deferred lazy-blob scopes. */
+  lock: OpLock;
 }
+
+/** Per-run context: user query options + transaction liveness for lazy blobs. */
+export interface RunContext {
+  query: QueryOptions;
+  /** True while the owning transaction is open (for lazy blob validity). */
+  txAlive: () => boolean;
+}
+
+const EMPTY_RUN: RunContext = { query: {}, txAlive: () => true };
 
 function textCodecOptions(opts: ResolvedOptions): TextCodecOptions {
   return {
@@ -71,6 +96,83 @@ function wantsRecordCounts(t: StmtType): boolean {
   return t === StmtType.insert || t === StmtType.update || t === StmtType.delete || t === StmtType.exec_procedure;
 }
 
+function isBlobType(t: number): boolean {
+  return t === SqlType.BLOB;
+}
+
+/**
+ * Maps raw row-arrays (with BlobRef cells) to shaped result objects, applying
+ * `exclude`/`only` and eager/lazy blob handling. Built once per statement run.
+ */
+class RowMapper {
+  private readonly keys: (string | null)[]; // null = column dropped
+  private readonly lazy: boolean;
+  private readonly scope: BlobScope | null;
+  /** Per column: text codec for a subtype-1 (text) blob, else null. */
+  private readonly blobCodec: (TextCodec | null)[];
+  readonly hasKeptEagerBlobs: boolean;
+
+  constructor(
+    private readonly ctx: SessionContext,
+    private readonly txHandle: number,
+    outputs: SqlVarDesc[],
+    run: RunContext,
+  ) {
+    const lc = ctx.opts.lowercaseKeys;
+    const only = run.query.only?.map((s) => s.toLowerCase());
+    const exclude = new Set(run.query.exclude?.map((s) => s.toLowerCase()) ?? []);
+    this.lazy = (run.query.blobs ?? ctx.opts.blobs) === 'lazy';
+    this.blobCodec = [];
+    let keptEagerBlobs = false;
+
+    this.keys = outputs.map((d, i) => {
+      const rawName = d.alias || d.field || `F${i + 1}`;
+      const lower = rawName.toLowerCase();
+      const kept = (!only || only.includes(lower)) && !exclude.has(lower);
+      this.blobCodec[i] = isBlobType(d.type) && d.subType === 1 ? codecForDesc(d, ctx.opts, 'blob') : null;
+      if (kept && isBlobType(d.type) && !this.lazy) keptEagerBlobs = true;
+      return kept ? (lc ? lower : rawName) : null;
+    });
+    this.hasKeptEagerBlobs = keptEagerBlobs;
+
+    this.scope =
+      this.lazy && outputs.some((d, i) => isBlobType(d.type) && this.keys[i] !== null)
+        ? {
+            wire: ctx.wire,
+            lock: ctx.lock,
+            txHandle,
+            chunkSize: ctx.opts.blobReadChunkSize,
+            isAlive: run.txAlive,
+          }
+        : null;
+  }
+
+  /** Eagerly materialize kept blob cells (call while holding the op-lock). */
+  async materialize(row: unknown[]): Promise<void> {
+    if (this.lazy || !this.hasKeptEagerBlobs) return;
+    for (let i = 0; i < row.length; i++) {
+      if (this.keys[i] === null) continue; // dropped → never fetch
+      const cell = row[i];
+      if (cell instanceof BlobRef) {
+        const data = await readBlob(this.ctx.wire, this.txHandle, cell.id, this.ctx.opts.blobReadChunkSize);
+        row[i] = cell.subType === 1 && this.blobCodec[i] ? this.blobCodec[i]!.decode(data) : data;
+      }
+    }
+  }
+
+  /** Build the result object; wraps remaining BlobRefs as lazy Blob handles. */
+  shape(row: unknown[]): Row {
+    const obj: Row = {};
+    for (let i = 0; i < this.keys.length; i++) {
+      const key = this.keys[i];
+      if (key == null) continue;
+      const cell = row[i];
+      obj[key] = cell instanceof BlobRef ? new Blob(cell.id, cell.subType, this.scope!, this.blobCodec[i] ?? null) : cell;
+    }
+    return obj;
+  }
+}
+
 /** Prepare a statement and attach its per-column text codecs. */
 export async function prepareInfo(ctx: SessionContext, txHandle: number, sql: string): Promise<PreparedStatementInfo> {
   const info = await allocateAndPrepare(ctx.wire, ctx.dbHandle, txHandle, sql);
@@ -98,9 +200,10 @@ export async function executePrepared(
   info: PreparedStatementInfo,
   params: ParamValue[],
   closeCursorAfter: boolean,
+  run: RunContext = EMPTY_RUN,
 ): Promise<QueryResult> {
   const { wire, opts } = ctx;
-  const outputs = info.description.outputs;
+  const mapper = new RowMapper(ctx, txHandle, info.description.outputs, run);
   const { prepared, encodeText } = await prepareParams(ctx, txHandle, info, params);
 
   const stmtType = info.description.stmtType;
@@ -134,8 +237,11 @@ export async function executePrepared(
     rowsAffected = counts.inserted + counts.updated + counts.deleted;
   }
 
-  // 3. Only now is it safe to issue new requests: materialize blob cells.
-  for (const row of rows) await materializeBlobs(ctx, txHandle, row, outputs);
+  // 3. Only now is it safe to issue new requests: eagerly materialize the
+  //    kept blob cells (lazy mode leaves BlobRefs for the mapper to wrap).
+  if (mapper.hasKeptEagerBlobs) {
+    for (const row of rows) await mapper.materialize(row);
+  }
 
   // 4. Close the cursor (deferred — rides with the next packet) so the
   //    statement handle can be re-executed later.
@@ -143,7 +249,7 @@ export async function executePrepared(
     freeStatement(wire, info.handle, FreeStatement.DSQL_close);
   }
 
-  return { rows: shapeRows(rows, outputs, opts.lowercaseKeys), rowsAffected };
+  return { rows: rows.map((r) => mapper.shape(r)), rowsAffected };
 }
 
 /** Validate arity, upload blob params, and build the text encoder. */
@@ -179,22 +285,6 @@ async function prepareParams(
   return { prepared, encodeText };
 }
 
-/** Replace BlobRef cells in a row with their materialized value (in place). */
-async function materializeBlobs(
-  ctx: SessionContext,
-  txHandle: number,
-  row: unknown[],
-  outputs: SqlVarDesc[],
-): Promise<void> {
-  for (let i = 0; i < row.length; i++) {
-    const cell = row[i];
-    if (cell instanceof BlobRef) {
-      const data = await readBlob(ctx.wire, txHandle, cell.id, ctx.opts.blobReadChunkSize);
-      row[i] = cell.subType === 1 ? codecForDesc(outputs[i]!, ctx.opts, 'blob').decode(data) : data;
-    }
-  }
-}
-
 /**
  * gds codes indicating the cached statement handle is stale (e.g. the table
  * was recreated by another attachment) and a re-prepare should be attempted.
@@ -217,11 +307,12 @@ export async function runStatement(
   txHandle: number,
   sql: string,
   params: ParamValue[],
+  run: RunContext = EMPTY_RUN,
 ): Promise<QueryResult> {
   const cached = ctx.cache?.get(sql);
   if (cached) {
     try {
-      const result = await executePrepared(ctx, txHandle, cached, params, true);
+      const result = await executePrepared(ctx, txHandle, cached, params, true, run);
       finishStatement(ctx, sql, cached);
       return result;
     } catch (err) {
@@ -232,7 +323,7 @@ export async function runStatement(
 
   const info = await prepareInfo(ctx, txHandle, sql);
   try {
-    const result = await executePrepared(ctx, txHandle, info, params, true);
+    const result = await executePrepared(ctx, txHandle, info, params, true, run);
     finishStatement(ctx, sql, info);
     return result;
   } catch (err) {
@@ -255,33 +346,12 @@ function finishStatement(ctx: SessionContext, sql: string, info: PreparedStateme
   }
 }
 
-/** Build a fast per-row shaper (column array → keyed object). */
-function rowShaper(descs: SqlVarDesc[], lowercaseKeys: boolean): (r: unknown[]) => Row {
-  const keys = descs.map((d, i) => {
-    const k = d.alias || d.field || `F${i + 1}`;
-    return lowercaseKeys ? k.toLowerCase() : k;
-  });
-  return (r) => {
-    const obj: Row = {};
-    for (let i = 0; i < keys.length; i++) obj[keys[i]!] = r[i];
-    return obj;
-  };
-}
-
-function shapeRows(rows: unknown[][], descs: SqlVarDesc[], lowercaseKeys: boolean): Row[] {
-  const shape = rowShaper(descs, lowercaseKeys);
-  return rows.map(shape);
-}
-
-/** A network-op serializer (Attachment.withLock). */
-export type OpLock = <T>(fn: () => Promise<T>) => Promise<T>;
-
 /**
- * Stream rows lazily: each batch is fetched (and its blobs materialized)
- * under `lock`, then yielded row by row. The NEXT op_fetch only fires when
- * the consumer drains the current batch — natural backpressure at batch
- * granularity. The statement/cursor is closed and cached (or dropped) when
- * iteration ends, breaks early, or throws.
+ * Stream rows lazily: each batch is fetched (and, in eager mode, its blobs
+ * materialized) under `lock`, then yielded row by row. The NEXT op_fetch only
+ * fires when the consumer drains the current batch — natural backpressure at
+ * batch granularity. The statement/cursor is closed and cached (or dropped)
+ * when iteration ends, breaks early, or throws.
  */
 export async function* streamRows(
   ctx: SessionContext,
@@ -289,14 +359,17 @@ export async function* streamRows(
   sql: string,
   params: ParamValue[],
   lock: OpLock,
+  run: RunContext = EMPTY_RUN,
 ): AsyncGenerator<Row> {
   const cached = ctx.cache?.get(sql);
   let info: PreparedStatementInfo | null = cached ?? null;
+  let mapper: RowMapper | null = null;
   let cursorOpen = false;
   let failed = false;
   try {
     const first = await lock(async () => {
       if (!info) info = await prepareInfo(ctx, txHandle, sql);
+      mapper = new RowMapper(ctx, txHandle, info.description.outputs, run);
       const { prepared, encodeText } = await prepareParams(ctx, txHandle, info, params);
       const isSelect = isSelectType(info.description.stmtType);
       const fc = isSelect ? nextFetchCount(info.rowWidth, ctx.opts.fetchSize, 0) : 0;
@@ -311,13 +384,11 @@ export async function* streamRows(
       } else {
         batch = { rows: exec.procRow ? [exec.procRow] : [], eof: true };
       }
-      for (const r of batch.rows) await materializeBlobs(ctx, txHandle, r, info.description.outputs);
+      for (const r of batch.rows) await mapper.materialize(r);
       return { batch, fc };
     });
 
-    const outputs = info!.description.outputs;
-    const shape = rowShaper(outputs, ctx.opts.lowercaseKeys);
-    for (const r of first.batch.rows) yield shape(r);
+    for (const r of first.batch.rows) yield mapper!.shape(r);
 
     let eof = first.batch.eof;
     let fc = first.fc;
@@ -325,10 +396,10 @@ export async function* streamRows(
       const b = await lock(async () => {
         fc = nextFetchCount(info!.rowWidth, ctx.opts.fetchSize, fc);
         const batch = await fetchRows(ctx.wire, info!, fc);
-        for (const r of batch.rows) await materializeBlobs(ctx, txHandle, r, outputs);
+        for (const r of batch.rows) await mapper!.materialize(r);
         return batch;
       });
-      for (const r of b.rows) yield shape(r);
+      for (const r of b.rows) yield mapper!.shape(r);
       eof = b.eof;
     }
   } catch (err) {

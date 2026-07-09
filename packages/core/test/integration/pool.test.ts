@@ -8,7 +8,7 @@ describe('connection pool (Firebird 5)', () => {
   let pool: Pool;
   beforeAll(async () => {
     pool = await createPool({ ...FB_BASE, port: fb5.port, min: 1, max: 3, idleTimeoutMs: 500 });
-    await withRetry(() => pool.use((c) => c.execute('recreate table t_pool (id integer primary key, v varchar(20))')));
+    await withRetry(() => pool.transaction((tx) => tx.execute('recreate table t_pool (id integer primary key, v varchar(20))'), { wait: false }));
   }, HOOK_TIMEOUT);
   afterAll(async () => {
     await pool.close();

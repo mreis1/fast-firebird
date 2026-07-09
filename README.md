@@ -144,6 +144,38 @@ error/break); `tx.queryStream` streams within a transaction you own. Don't run
 other statements on the *same* connection mid-stream — use another connection
 or the pool for concurrency.
 
+## Blobs: eager (default) or lazy handles
+
+By default blob columns are materialized (Buffer, or decoded string for
+subtype-1 text). For big/optional blobs, `blobs: 'lazy'` returns a `Blob`
+handle per non-null cell — nothing is fetched until you ask, so blobs you
+don't touch cost **zero** round trips:
+
+```ts
+await db.transaction(async (tx) => {
+  for await (const row of tx.queryStream('select id, photo, notes from docs', [], { blobs: 'lazy' })) {
+    const notes = await row.NOTES?.text();        // fetched on demand (subtype-1 decoded)
+    // row.PHOTO never touched → never fetched
+  }
+});
+
+// or stream a large blob in backpressured chunks
+await pipeline(row.PHOTO.stream({ chunkSize: 64 * 1024 }), fs.createWriteStream('out.jpg'));
+```
+
+`Blob` exposes `buffer()` (cached), `text(encoding?)`, `stream({chunkSize})`,
+and `size()`. Handles are **transaction-scoped** — read them before the
+transaction commits (reading a stale handle throws `FirebirdBlobError`). Lazy
+mode therefore requires `tx.query`/`queryStream`; `db.query` with lazy throws.
+Set the default per connection with `connect({ blobs: 'lazy' })`.
+
+Skip specific columns without listing all of them (drops them from the row and,
+for blobs, skips fetching entirely in eager mode):
+
+```ts
+await db.query('select * from docs', [], { exclude: ['PHOTO'] }); // or { only: ['ID', 'NAME'] }
+```
+
 ## Connection pooling
 
 ```ts

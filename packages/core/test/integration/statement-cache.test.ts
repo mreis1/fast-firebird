@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { connect, type Attachment } from '../../src/index.js';
-import { FB_BASE, FB_SERVERS, withRetry, HOOK_TIMEOUT } from './env.js';
+import { FB_BASE, FB_SERVERS, HOOK_TIMEOUT, ddl } from './env.js';
 
 describe.each(FB_SERVERS)('statement cache & round trips on Firebird $version', ({ port, version }) => {
   let db: Attachment;
@@ -8,7 +8,7 @@ describe.each(FB_SERVERS)('statement cache & round trips on Firebird $version', 
 
   beforeAll(async () => {
     db = await connect({ ...FB_BASE, port });
-    await withRetry(() => db.execute(`recreate table ${table} (id integer not null primary key, name varchar(40))`));
+    await ddl(db, `recreate table ${table} (id integer not null primary key, name varchar(40))`);
     await db.execute(`insert into ${table} values (1, 'one')`);
     await db.execute(`insert into ${table} values (2, 'two')`);
   }, HOOK_TIMEOUT);
@@ -99,7 +99,7 @@ describe.each(FB_SERVERS)('statement cache & round trips on Firebird $version', 
     const sql = `select * from ${table} where id = ?`;
     const [r1] = await db.query(sql, [1]);
     expect(Object.keys(r1!)).toEqual(['ID', 'NAME']);
-    await withRetry(() => db.execute(`alter table ${table} add extra integer default 7`));
+    await ddl(db, `alter table ${table} add extra integer default 7`);
     const [r2] = await db.query(sql, [1]);
     expect(Object.keys(r2!)).toEqual(['ID', 'NAME', 'EXTRA']);
   });

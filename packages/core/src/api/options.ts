@@ -29,6 +29,8 @@ export interface FirebirdConnectionOptions {
   authPlugin?: 'Srp256' | 'Srp' | 'Legacy_Auth' | 'auto';
 
   blobAsText?: boolean;
+  /** Default blob handling: 'eager' (materialize, default) or 'lazy' (handles). */
+  blobs?: 'eager' | 'lazy';
   blobWriteChunkSize?: number;
   blobReadChunkSize?: number;
   /** Rows requested per fetch round trip. */
@@ -74,6 +76,7 @@ export interface ResolvedOptions {
   wireCryptPlugin: string | undefined;
   authPlugin: string | undefined;
   blobAsText: boolean;
+  blobs: 'eager' | 'lazy';
   blobWriteChunkSize: number;
   blobReadChunkSize: number;
   fetchSize: number;
@@ -109,6 +112,7 @@ export function resolveOptions(raw: FirebirdConnectionOptions & LegacyOptionAlia
     wireCryptPlugin: raw.wireCryptPlugin,
     authPlugin: raw.authPlugin === 'auto' ? undefined : (raw.authPlugin ?? (raw.pluginName as string | undefined)),
     blobAsText: raw.blobAsText ?? false,
+    blobs: raw.blobs ?? 'eager',
     // Wire maximum by default — blob throughput is round-trip-bound.
     blobWriteChunkSize: clamp(raw.blobWriteChunkSize ?? raw.blobChunkSize ?? 65_535, 1, 65_535),
     blobReadChunkSize: clamp(raw.blobReadChunkSize ?? 65_535, 1, 65_535),

@@ -49,3 +49,12 @@ export async function withRetry<T>(fn: () => Promise<T>, attempts = 8): Promise<
   }
   throw lastErr;
 }
+
+/**
+ * Run DDL in a NOWAIT transaction so a metadata-lock conflict (from another
+ * test file touching the shared database) raises immediately and is retried,
+ * rather than blocking the default wait-forever transaction and timing out.
+ */
+export async function ddl(db: import('../../src/index.js').Attachment, sql: string): Promise<void> {
+  await withRetry(() => db.transaction((tx) => tx.execute(sql), { wait: false }), 25);
+}

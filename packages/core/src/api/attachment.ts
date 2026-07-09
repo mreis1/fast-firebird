@@ -3,7 +3,16 @@ import { WireConnection } from '../protocol/wire.js';
 import { performHandshake, type HandshakeResult } from '../protocol/handshake.js';
 import { attachDatabase, createDatabase, detachDatabase, dropDatabase } from '../protocol/attach.js';
 import { startTransaction, type TransactionOptions } from '../protocol/transaction.js';
-import { prepareInfo, runStatement, streamRows, type QueryResult, type Row, type SessionContext } from './session.js';
+import {
+  prepareInfo,
+  runStatement,
+  streamRows,
+  type QueryOptions,
+  type QueryResult,
+  type Row,
+  type SessionContext,
+} from './session.js';
+import { FirebirdBlobError, FirebirdConnectionError } from './errors.js';
 import { StatementCache } from './statement-cache.js';
 import { PreparedStatement } from './prepared.js';
 import { Transaction } from './transaction.js';
@@ -35,6 +44,7 @@ export class Attachment {
       dbHandle,
       opts: options,
       cache: options.statementCacheSize > 0 ? new StatementCache(wire, options.statementCacheSize) : null,
+      lock: (fn) => this.withLock(fn),
     };
   }
 
@@ -62,21 +72,31 @@ export class Attachment {
     });
     const wire = new WireConnection(transport);
     try {
-      const hs = await performHandshake(wire, {
-        database: opts.database,
-        user: opts.user,
-        password: opts.password,
-        wireCrypt: opts.wireCrypt,
-        wireCompression: opts.wireCompression,
-        wireCryptPlugin: opts.wireCryptPlugin,
-        authPlugin: opts.authPlugin,
-        srpSeed: opts.srpSeed,
-      });
-      const handle =
-        mode === 'create'
-          ? await createDatabase(wire, opts, hs.dpbAuthData, hs.pendingAuth)
-          : await attachDatabase(wire, opts, hs.dpbAuthData, hs.pendingAuth);
-      return new Attachment(wire, opts, hs, handle);
+      // The connect deadline must cover the handshake + attach, not just the
+      // TCP connect: a loaded server can accept the socket then stall on its
+      // responses, which would otherwise hang the read forever.
+      const handle = await withTimeout(
+        opts.connectTimeoutMs,
+        `Handshake/attach to ${opts.host}:${opts.port}`,
+        async () => {
+          const hs = await performHandshake(wire, {
+            database: opts.database,
+            user: opts.user,
+            password: opts.password,
+            wireCrypt: opts.wireCrypt,
+            wireCompression: opts.wireCompression,
+            wireCryptPlugin: opts.wireCryptPlugin,
+            authPlugin: opts.authPlugin,
+            srpSeed: opts.srpSeed,
+          });
+          const h =
+            mode === 'create'
+              ? await createDatabase(wire, opts, hs.dpbAuthData, hs.pendingAuth)
+              : await attachDatabase(wire, opts, hs.dpbAuthData, hs.pendingAuth);
+          return { hs, h };
+        },
+      );
+      return new Attachment(wire, opts, handle.hs, handle.h);
     } catch (err) {
       wire.close();
       throw err;
@@ -129,8 +149,8 @@ export class Attachment {
   }
 
   /** Run a single statement in its own transaction and return the rows. */
-  async query(sql: string, params: ParamValue[] = []): Promise<Row[]> {
-    return (await this.run(sql, params)).rows;
+  async query(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<Row[]> {
+    return (await this.run(sql, params, options)).rows;
   }
 
   /**
@@ -156,10 +176,17 @@ export class Attachment {
   }
 
   /** Run a single statement in its own transaction; returns rows + count. */
-  async run(sql: string, params: ParamValue[] = []): Promise<QueryResult> {
+  async run(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<QueryResult> {
+    if ((options?.blobs ?? this.options.blobs) === 'lazy') {
+      throw new FirebirdBlobError(
+        "lazy blobs require an explicit transaction or a stream — use db.transaction(tx => tx.query(…, {blobs:'lazy'})) or db.queryStream(…, {blobs:'lazy'})",
+      );
+    }
     const tx = await this.startTransaction();
     try {
-      const result = await this.withLock(() => runStatement(this.session, tx.handle, sql, params));
+      const result = await this.withLock(() =>
+        runStatement(this.session, tx.handle, sql, params, { query: options ?? {}, txAlive: () => !tx.isFinished }),
+      );
       await tx.commit();
       return result;
     } catch (err) {
@@ -175,8 +202,8 @@ export class Attachment {
   }
 
   /** Run a single statement in its own transaction; returns affected count. */
-  async execute(sql: string, params: ParamValue[] = []): Promise<number> {
-    return (await this.run(sql, params)).rowsAffected;
+  async execute(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<number> {
+    return (await this.run(sql, params, options)).rowsAffected;
   }
 
   /**
@@ -223,11 +250,14 @@ export class Attachment {
     this.eventChannel = null;
   }
 
-  async *queryStream(sql: string, params: ParamValue[] = []): AsyncGenerator<Row> {
+  async *queryStream(sql: string, params: ParamValue[] = [], options?: QueryOptions): AsyncGenerator<Row> {
     const tx = await this.startTransaction();
     let ok = false;
     try {
-      yield* streamRows(this.session, tx.handle, sql, params, (fn) => this.withLock(fn));
+      yield* streamRows(this.session, tx.handle, sql, params, (fn) => this.withLock(fn), {
+        query: options ?? {},
+        txAlive: () => !tx.isFinished && this.isAlive,
+      });
       ok = true;
     } finally {
       if (!tx.isFinished) {
@@ -278,6 +308,20 @@ export class Attachment {
     } finally {
       this.wire.close();
     }
+  }
+}
+
+/** Reject if `fn` doesn't settle within `ms` (covers stalled server responses). */
+async function withTimeout<T>(ms: number, label: string, fn: () => Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new FirebirdConnectionError(`${label} timed out after ${ms}ms`)), ms);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([fn(), timeout]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 

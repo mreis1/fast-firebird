@@ -31,3 +31,8 @@ export class FirebirdAuthError extends FirebirdError {
 export class FirebirdProtocolError extends FirebirdError {
   override name = 'FirebirdProtocolError';
 }
+
+/** Misuse of a lazy Blob handle (e.g. read after its transaction closed). */
+export class FirebirdBlobError extends FirebirdError {
+  override name = 'FirebirdBlobError';
+}

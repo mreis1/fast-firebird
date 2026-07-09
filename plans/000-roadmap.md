@@ -102,8 +102,12 @@ only when API surface stabilizes (avoid premature package fragmentation).
 - [x] Legacy_Auth plugin (DES crypt(3), UTF-8 password bytes) — verified live on
       a Legacy_Auth server; `authPlugin:'Legacy_Auth'`. Clear error when a
       WireCrypt=Disabled server refuses op_crypt. 6 crypt-vector + 4 integration tests.
-- [ ] Lazy blobs + blob streaming (`Blob.buffer/text/stream`); eager stays default
-- [ ] Column `exclude`/`only` (decode-time; skips unneeded BLOB materialization)
+- [x] Lazy blobs + blob streaming (`Blob.buffer/text/stream/size`, `blobs:'lazy'`
+      per-query or per-connection; eager default). Handles are transaction-scoped
+      with dead-handle detection (FirebirdBlobError); `db.query` lazy throws.
+      Connect timeout now covers the handshake (not just TCP).
+- [x] Column `exclude`/`only` (decode-time; drops columns + skips unneeded BLOB
+      materialization). 33 tests; verified unread blobs cost zero round trips.
 - [ ] Transaction `restart()` + stored options; opt-in `autoUpgradeReadOnly`
 - [ ] Pool blob-parallel helper (`pool.materialize`, honest single-conn note)
 - [ ] `plans/projection.md` — `SELECT *` rewrite (`expandStar`) DEFERRED/future

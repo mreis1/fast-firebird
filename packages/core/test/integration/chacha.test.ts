@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { connect } from '../../src/index.js';
-import { FB_BASE, FB_SERVERS, withRetry } from './env.js';
+import { FB_BASE, FB_SERVERS, ddl } from './env.js';
 
 const FB45 = FB_SERVERS.filter((s) => s.version >= 4);
 
@@ -28,7 +28,7 @@ describe.each(FB45)('ChaCha wire crypt on Firebird $version', ({ port }) => {
   it('ChaCha survives blob round-trips', async () => {
     const db = await connect({ ...FB_BASE, port, wireCryptPlugin: 'ChaCha' });
     try {
-      await withRetry(() => db.execute('recreate table t_cc_blob (id integer, data blob)'));
+      await ddl(db, 'recreate table t_cc_blob (id integer, data blob)');
       const payload = Buffer.alloc(120_000);
       for (let i = 0; i < payload.length; i++) payload[i] = (i * 7) & 0xff;
       await db.execute('insert into t_cc_blob values (?, ?)', [1, payload]);

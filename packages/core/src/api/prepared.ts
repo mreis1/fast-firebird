@@ -1,6 +1,7 @@
 import { FreeStatement } from '../protocol/constants.js';
 import { freeStatement, type PreparedStatementInfo } from '../protocol/statement.js';
-import { executePrepared, type QueryResult, type Row } from './session.js';
+import { executePrepared, type QueryOptions, type QueryResult, type Row } from './session.js';
+import { FirebirdBlobError } from './errors.js';
 import type { SqlVarDesc } from '../protocol/info.js';
 import type { ParamValue } from '../protocol/msgcodec.js';
 import type { Attachment } from './attachment.js';
@@ -35,15 +36,28 @@ export class PreparedStatement {
   }
 
   /** Run inside an explicit transaction, or a one-shot one when omitted. */
-  async run(params: ParamValue[] = [], tx?: Transaction): Promise<QueryResult> {
+  async run(params: ParamValue[] = [], tx?: Transaction, options?: QueryOptions): Promise<QueryResult> {
     this.assertOpen();
     if (tx) {
-      return this.att.withLock(() => executePrepared(this.att.session, tx.handle, this.info, params, true));
+      return this.att.withLock(() =>
+        executePrepared(this.att.session, tx.handle, this.info, params, true, {
+          query: options ?? {},
+          txAlive: () => !tx.isFinished && this.att.isAlive,
+        }),
+      );
+    }
+    if ((options?.blobs ?? this.att.options.blobs) === 'lazy') {
+      throw new FirebirdBlobError(
+        "lazy blobs require an explicit transaction — pass a tx to stmt.run(params, tx, {blobs:'lazy'})",
+      );
     }
     const own = await this.att.startTransaction();
     try {
       const result = await this.att.withLock(() =>
-        executePrepared(this.att.session, own.handle, this.info, params, true),
+        executePrepared(this.att.session, own.handle, this.info, params, true, {
+          query: options ?? {},
+          txAlive: () => !own.isFinished,
+        }),
       );
       await own.commit();
       return result;
@@ -59,12 +73,12 @@ export class PreparedStatement {
     }
   }
 
-  async query(params: ParamValue[] = [], tx?: Transaction): Promise<Row[]> {
-    return (await this.run(params, tx)).rows;
+  async query(params: ParamValue[] = [], tx?: Transaction, options?: QueryOptions): Promise<Row[]> {
+    return (await this.run(params, tx, options)).rows;
   }
 
-  async execute(params: ParamValue[] = [], tx?: Transaction): Promise<number> {
-    return (await this.run(params, tx)).rowsAffected;
+  async execute(params: ParamValue[] = [], tx?: Transaction, options?: QueryOptions): Promise<number> {
+    return (await this.run(params, tx, options)).rowsAffected;
   }
 
   /** Release the server-side handle (deferred; rides with the next packet). */

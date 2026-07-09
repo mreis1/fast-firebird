@@ -1,7 +1,7 @@
 import { Readable } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { connect, type Attachment } from '../../src/index.js';
-import { FB_BASE, FB_SERVERS, withRetry, HOOK_TIMEOUT } from './env.js';
+import { FB_BASE, FB_SERVERS, HOOK_TIMEOUT, ddl } from './env.js';
 
 describe.each(FB_SERVERS)('streaming on Firebird $version', ({ port, version }) => {
   let db: Attachment;
@@ -9,7 +9,7 @@ describe.each(FB_SERVERS)('streaming on Firebird $version', ({ port, version }) 
 
   beforeAll(async () => {
     db = await connect({ ...FB_BASE, port });
-    await withRetry(() => db.execute(`recreate table ${table} (id integer primary key, note blob sub_type text)`));
+    await ddl(db, `recreate table ${table} (id integer primary key, note blob sub_type text)`);
     await db.transaction(async (tx) => {
       for (let i = 1; i <= 2500; i++) {
         await tx.execute(`insert into ${table} (id, note) values (?, ?)`, [i, `note #${i} — ção €`]);

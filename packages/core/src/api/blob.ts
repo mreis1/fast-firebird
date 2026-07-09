@@ -1,0 +1,131 @@
+import { Readable } from 'node:stream';
+import { blobTotalLength, closeBlobDeferred, getBlobSegment, openBlob, readBlob } from '../protocol/blob.js';
+import { FirebirdBlobError } from './errors.js';
+import type { WireConnection } from '../protocol/wire.js';
+import type { TextCodec } from '../charset/decoder.js';
+
+/**
+ * Everything a lazy Blob needs to fetch itself later: the wire, the
+ * connection op-lock, its owning transaction handle, and a liveness check.
+ * @internal
+ */
+export interface BlobScope {
+  wire: WireConnection;
+  lock: <T>(fn: () => Promise<T>) => Promise<T>;
+  txHandle: number;
+  chunkSize: number;
+  /** True while the owning transaction + connection are still usable. */
+  isAlive(): boolean;
+}
+
+/**
+ * A lazy handle to a Firebird blob. Nothing is fetched until you call a
+ * method. VALID ONLY until its transaction closes — Firebird blob ids are
+ * transaction-scoped; reading one after commit throws `FirebirdBlobError`.
+ */
+export class Blob {
+  private cached: Buffer | null = null;
+
+  /** @internal */
+  constructor(
+    private readonly id: Buffer,
+    /** Blob subtype: 0 = binary, 1 = text. */
+    readonly subType: number,
+    private readonly scope: BlobScope,
+    private readonly textCodec: TextCodec | null,
+  ) {}
+
+  private assertAlive(): void {
+    if (!this.scope.isAlive()) {
+      throw new FirebirdBlobError(
+        "blob handle used after its transaction closed — read lazy blobs before commit, or use blobs:'eager'",
+      );
+    }
+  }
+
+  /** Materialize the full blob as a Buffer (cached; subsequent calls are free). */
+  async buffer(): Promise<Buffer> {
+    if (this.cached) return this.cached;
+    this.assertAlive();
+    const data = await this.scope.lock(() => readBlob(this.scope.wire, this.scope.txHandle, this.id, this.scope.chunkSize));
+    this.cached = data;
+    return data;
+  }
+
+  /**
+   * Materialize as a decoded string. Subtype-1 (text) blobs use the column's
+   * charset codec; binary blobs use `encoding` (default utf8).
+   */
+  async text(encoding?: BufferEncoding): Promise<string> {
+    const buf = await this.buffer();
+    if (this.subType === 1 && this.textCodec && !encoding) {
+      const decoded = this.textCodec.decode(buf);
+      return typeof decoded === 'string' ? decoded : decoded.toString('utf8');
+    }
+    return buf.toString(encoding ?? 'utf8');
+  }
+
+  /** Total byte length via op_info_blob (one round trip; opens + closes the blob). */
+  async size(): Promise<number> {
+    if (this.cached) return this.cached.length;
+    this.assertAlive();
+    return this.scope.lock(async () => {
+      const handle = await openBlob(this.scope.wire, this.scope.txHandle, this.id);
+      try {
+        return await blobTotalLength(this.scope.wire, handle);
+      } finally {
+        closeBlobDeferred(this.scope.wire, handle);
+      }
+    });
+  }
+
+  /**
+   * Stream the blob in backpressured chunks (one op_get_segment per pull).
+   * One-shot: consume once. Prefer this for large blobs to avoid buffering.
+   */
+  stream(opts: { chunkSize?: number } = {}): Readable {
+    this.assertAlive();
+    const scope = this.scope;
+    const id = this.id;
+    const chunkSize = opts.chunkSize ?? scope.chunkSize;
+    let handle: number | null = null;
+    let finished = false;
+    let pulling = false;
+
+    // Pull segments until the Readable's buffer is satisfied (push returns
+    // false) or the blob is exhausted. Empty-but-not-eof segments loop here
+    // rather than via this.read(), avoiding paused-mode re-entrancy.
+    const pull = (readable: Readable): void => {
+      if (pulling || finished) return;
+      pulling = true;
+      void scope
+        .lock(async () => {
+          if (!scope.isAlive()) throw new FirebirdBlobError('blob stream used after its transaction closed');
+          if (handle === null) handle = await openBlob(scope.wire, scope.txHandle, id);
+          return getBlobSegment(scope.wire, handle, chunkSize);
+        })
+        .then((seg) => {
+          pulling = false;
+          if (seg.eof) {
+            finished = true;
+            if (seg.data.length > 0) readable.push(seg.data);
+            if (handle !== null) void scope.lock(async () => closeBlobDeferred(scope.wire, handle!));
+            readable.push(null);
+            return;
+          }
+          // Keep pulling while the consumer still wants more (push → true).
+          if (seg.data.length === 0 || readable.push(seg.data)) pull(readable);
+        })
+        .catch((err) => {
+          pulling = false;
+          readable.destroy(err as Error);
+        });
+    };
+
+    return new Readable({
+      read(): void {
+        pull(this);
+      },
+    });
+  }
+}
