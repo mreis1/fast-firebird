@@ -146,11 +146,15 @@ app.get('/api/servers/:id/stream', async (req, reply) => {
   try {
     const t0 = performance.now();
     let seen = 0;
-    const gen = att.queryStream(`with recursive g as (select 1 as n from rdb$database union all select n + 1 from g where n < ${count}) select n from g`);
-    for await (const row of gen) {
+    // Non-recursive row generator: a 3-way cross-join of rdb$types (hundreds of
+    // rows) yields millions of combinations, and ROWS short-circuits after N
+    // (no window function, or Firebird would materialize the whole product
+    // first). Recursive CTEs can't do this — they hit the ~1024 depth limit.
+    const gen = att.queryStream(`select 1 as n from rdb$types a, rdb$types b, rdb$types c rows ${count}`);
+    for await (const _row of gen) {
       if (closed) break;
       seen++;
-      if (seen % 250 === 0 || seen === count) ch.send({ seen, total: count, ms: +(performance.now() - t0).toFixed(0), sample: serializeCell((row as any).N) });
+      if (seen % 250 === 0 || seen === count) ch.send({ seen, total: count, ms: +(performance.now() - t0).toFixed(0), sample: seen });
     }
     if (!closed) ch.send({ done: true, seen, ms: +(performance.now() - t0).toFixed(0) });
   } catch (e) {

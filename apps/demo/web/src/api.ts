@@ -67,8 +67,16 @@ export const api = {
   blob: (id: string) => json<{ note: string; binary: unknown }>(`/api/servers/${id}/blob`, {}),
 };
 
-/** Subscribe to an SSE endpoint; returns the latest N messages, resets on url change. */
-export function useSse<T = any>(url: string | null, keep = 50): { events: T[]; clear: () => void } {
+/**
+ * Subscribe to an SSE endpoint; returns the latest N messages, resets on url
+ * change. `closeOn` closes the stream when a message matches (for one-shot
+ * streams like row-streaming) so the browser doesn't auto-reconnect.
+ */
+export function useSse<T = any>(
+  url: string | null,
+  opts: { keep?: number; closeOn?: (msg: T) => boolean } = {},
+): { events: T[]; clear: () => void } {
+  const { keep = 50, closeOn } = opts;
   const [events, setEvents] = useState<T[]>([]);
   const esRef = useRef<EventSource | null>(null);
   useEffect(() => {
@@ -79,9 +87,10 @@ export function useSse<T = any>(url: string | null, keep = 50): { events: T[]; c
     es.onmessage = (e) => {
       const data = JSON.parse(e.data) as T;
       setEvents((prev) => [...prev.slice(-(keep - 1)), data]);
+      if (closeOn?.(data)) es.close();
     };
-    es.onerror = () => { /* browser auto-reconnects */ };
+    es.onerror = () => es.close();
     return () => es.close();
-  }, [url, keep]);
+  }, [url]);
   return { events, clear: () => setEvents([]) };
 }

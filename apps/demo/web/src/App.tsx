@@ -271,7 +271,7 @@ function EventsPanel({ id }: { id: string }) {
 function StreamPanel({ id }: { id: string }) {
   const [count, setCount] = useState(5000);
   const [url, setUrl] = useState<string | null>(null);
-  const { events } = useSse<any>(url);
+  const { events } = useSse<any>(url, { closeOn: (m) => !!(m.done || m.error) });
   const last = events[events.length - 1];
   const pct = last ? Math.round((last.seen / (last.total || count)) * 100) : 0;
   return (
@@ -283,11 +283,14 @@ function StreamPanel({ id }: { id: string }) {
           Stream
         </button>
       </div>
-      {last && (
+      {last?.error && <div className="err-text" style={{ marginTop: 10 }}>{last.error}</div>}
+      {last && !last.error && (
         <>
           <div className="row mt" style={{ justifyContent: 'space-between' }}>
-            <span className="kv"><span style={{ fontFamily: 'var(--mono)' }}>{last.seen ?? 0} / {last.total ?? count} rows</span></span>
-            <span style={{ fontFamily: 'var(--mono)', color: 'var(--muted)' }}>{last.ms} ms{last.done ? ' ✓' : ''}</span>
+            <span style={{ fontFamily: 'var(--mono)' }}>{last.seen ?? 0} / {last.total ?? count} rows</span>
+            <span style={{ fontFamily: 'var(--mono)', color: 'var(--muted)' }}>
+              {last.ms} ms{last.done ? ` ✓ · ${Math.round((last.seen / Math.max(1, last.ms)) * 1000).toLocaleString()} rows/s` : ''}
+            </span>
           </div>
           <div className="bar" style={{ marginTop: 6 }}><i style={{ width: `${pct}%` }} /></div>
         </>
