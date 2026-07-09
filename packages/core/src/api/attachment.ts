@@ -63,6 +63,7 @@ export class Attachment {
         user: opts.user,
         password: opts.password,
         wireCrypt: opts.wireCrypt,
+        wireCompression: opts.wireCompression,
         authPlugin: opts.authPlugin,
         srpSeed: opts.srpSeed,
       });
@@ -84,6 +85,10 @@ export class Attachment {
 
   get wireEncrypted(): boolean {
     return this.handshake.encrypted;
+  }
+
+  get wireCompressed(): boolean {
+    return this.handshake.compressed;
   }
 
   /** Start an explicit transaction. */

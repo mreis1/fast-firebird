@@ -22,6 +22,8 @@ export interface FirebirdConnectionOptions {
   connectTimeoutMs?: number;
 
   wireCrypt?: WireCryptOption;
+  /** zlib wire compression (server needs WireCompression=true). Default off. */
+  wireCompression?: boolean;
   authPlugin?: 'Srp256' | 'Srp' | 'auto';
 
   blobAsText?: boolean;
@@ -66,6 +68,7 @@ export interface ResolvedOptions {
   pageSize: number;
   connectTimeoutMs: number;
   wireCrypt: WireCryptLevel;
+  wireCompression: boolean;
   authPlugin: string | undefined;
   blobAsText: boolean;
   blobWriteChunkSize: number;
@@ -99,6 +102,7 @@ export function resolveOptions(raw: FirebirdConnectionOptions & LegacyOptionAlia
     pageSize: raw.pageSize ?? 8192,
     connectTimeoutMs: raw.connectTimeoutMs ?? raw.connectTimeout ?? 10_000,
     wireCrypt: WIRE_CRYPT_MAP[raw.wireCrypt ?? 'enabled'],
+    wireCompression: raw.wireCompression ?? false,
     authPlugin: raw.authPlugin === 'auto' ? undefined : (raw.authPlugin ?? (raw.pluginName as string | undefined)),
     blobAsText: raw.blobAsText ?? false,
     blobWriteChunkSize: clamp(raw.blobWriteChunkSize ?? raw.blobChunkSize ?? 16_384, 1, 65_535),

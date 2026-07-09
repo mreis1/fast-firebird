@@ -16,6 +16,8 @@ x-fb-common: &fb-common
     FIREBIRD_DATABASE_DEFAULT_CHARSET: UTF8
     # Allow both encrypted and plaintext wire so tests can exercise each mode.
     FIREBIRD_CONF_WireCrypt: Enabled
+    # Let clients negotiate zlib wire compression.
+    FIREBIRD_CONF_WireCompression: "true"
   healthcheck:
     test: ["CMD", "bash", "-c", "</dev/tcp/127.0.0.1/3050"]
     interval: 2s

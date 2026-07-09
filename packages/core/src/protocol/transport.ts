@@ -1,9 +1,10 @@
 import { Socket, connect as netConnect } from 'node:net';
+import { createDeflate, createInflate, constants as zc, type Deflate, type Inflate } from 'node:zlib';
 
 /**
- * Bidirectional byte filter installed on the wire (encryption, compression).
- * Filters are applied to sent bytes in installation order and to received
- * bytes in reverse order.
+ * Symmetric byte filter for wire encryption (e.g. Arc4). Synchronous.
+ * Compression is NOT a WireFilter — it is a stateful stream stage owned by
+ * the transport (see pipeline order below).
  */
 export interface WireFilter {
   send(data: Buffer): Buffer;
@@ -62,15 +63,25 @@ class ByteQueue {
 }
 
 /**
- * TCP transport with an awaitable exact-read interface and pluggable
- * wire filters. Writes are explicitly coalesced: callers build one or more
- * packets and flush them in a single socket write (round-trip discipline).
+ * TCP transport with an awaitable exact-read interface.
+ *
+ * Wire pipeline (matching Firebird's layering — compression beneath crypt):
+ *   send:    packet → [deflate] → [encrypt] → socket
+ *   receive: socket → [decrypt] → [inflate] → ByteQueue
+ *
+ * Encryption is split tx/rx: the rx side decrypts from the moment op_crypt is
+ * sent (the response already comes back encrypted), while the tx side must
+ * not engage until the compressor has flushed op_crypt itself — hence the
+ * flush barrier in `installCrypt`.
  */
 export class Transport {
   private socket!: Socket;
   private readonly rx = new ByteQueue();
   private rxWaiter: { resolve: () => void; reject: (e: Error) => void } | null = null;
-  private filters: WireFilter[] = [];
+  private txCrypt: WireFilter | null = null;
+  private rxCrypt: WireFilter | null = null;
+  private deflater: Deflate | null = null;
+  private inflater: Inflate | null = null;
   private error: Error | null = null;
   private closed = false;
 
@@ -108,15 +119,54 @@ export class Transport {
     });
   }
 
-  /** Install a filter (e.g. Arc4 after crypt negotiation, zlib for compression). */
-  addFilter(filter: WireFilter): void {
-    this.filters.push(filter);
+  /**
+   * Enable zlib wire compression (both directions), as negotiated via
+   * pflag_compress. Must be called before any compressed bytes arrive —
+   * i.e. immediately after parsing the accept packet.
+   */
+  enableCompression(): void {
+    this.deflater = createDeflate({ flush: zc.Z_SYNC_FLUSH });
+    this.deflater.on('data', (chunk: Buffer) => this.socketWrite(chunk));
+    this.deflater.on('error', (err: Error) => this.fail(err));
+
+    this.inflater = createInflate();
+    this.inflater.on('data', (chunk: Buffer) => this.enqueue(chunk));
+    this.inflater.on('error', (err: Error) => this.fail(err));
+  }
+
+  get compressionEnabled(): boolean {
+    return this.deflater !== null;
+  }
+
+  /**
+   * Engage wire encryption. Decryption applies to all bytes arriving after
+   * this call; encryption engages once pending compressed output (the
+   * op_crypt packet) has drained.
+   */
+  installCrypt(filter: WireFilter): Promise<void> {
+    this.rxCrypt = filter;
+    if (!this.deflater) {
+      this.txCrypt = filter;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      this.deflater!.flush(zc.Z_SYNC_FLUSH, () => {
+        this.txCrypt = filter;
+        resolve();
+      });
+    });
   }
 
   private onData(data: Buffer): void {
-    for (let i = this.filters.length - 1; i >= 0; i--) {
-      data = this.filters[i]!.receive(data);
+    if (this.rxCrypt) data = this.rxCrypt.receive(data);
+    if (this.inflater) {
+      this.inflater.write(data);
+    } else {
+      this.enqueue(data);
     }
+  }
+
+  private enqueue(data: Buffer): void {
     this.rx.push(data);
     this.rxWaiter?.resolve();
   }
@@ -145,15 +195,26 @@ export class Transport {
     return this.rx.length;
   }
 
-  /** Send bytes through filters in one socket write. */
+  /** Send one packet through the pipeline. */
   write(data: Buffer): void {
     if (this.error) throw this.error;
-    for (const f of this.filters) data = f.send(data);
+    if (this.deflater) {
+      this.deflater.write(data);
+    } else {
+      this.socketWrite(data);
+    }
+  }
+
+  private socketWrite(data: Buffer): void {
+    if (this.error) return; // compressed chunks may drain after failure
+    if (this.txCrypt) data = this.txCrypt.send(data);
     this.socket.write(data);
   }
 
   close(): void {
     this.closed = true;
+    this.deflater?.destroy();
+    this.inflater?.destroy();
     this.socket.destroy();
   }
 }

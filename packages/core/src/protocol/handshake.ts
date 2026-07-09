@@ -6,6 +6,7 @@ import {
   CONNECT_VERSION3,
   FB_PROTOCOL_FLAG,
   Op,
+  PFLAG_COMPRESS,
   Ptype,
   SUPPORTED_PROTOCOLS,
   WireCryptLevel,
@@ -21,6 +22,8 @@ export interface HandshakeOptions {
   user: string;
   password: string;
   wireCrypt: WireCryptLevel;
+  /** Request zlib wire compression (server must have WireCompression on). */
+  wireCompression?: boolean;
   authPlugin?: string; // default: first of AUTH_PLUGIN_LIST
   /** @internal Deterministic SRP ephemeral seed — testing only. */
   srpSeed?: Buffer;
@@ -49,6 +52,8 @@ export interface HandshakeResult {
   pendingAuth: PendingAuth | null;
   /** True when the wire is now encrypted. */
   encrypted: boolean;
+  /** True when zlib wire compression was negotiated. */
+  compressed: boolean;
 }
 
 /** Split data into 254-byte chunks: [tag, len+1, step, ...chunk] each. */
@@ -136,7 +141,8 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
     .int32(SUPPORTED_PROTOCOLS.length)
     .opaque(buildUserIdentification(opts, ephemeral.publicHex, plugin));
   for (const [version, arch, minT, maxT, weight] of SUPPORTED_PROTOCOLS) {
-    w.uint32(version).int32(arch).int32(minT).int32(maxT).int32(weight);
+    const max = opts.wireCompression ? maxT | PFLAG_COMPRESS : maxT;
+    w.uint32(version).int32(arch).int32(minT).int32(max).int32(weight);
   }
   wire.flush();
 
@@ -148,6 +154,10 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
       `Server negotiated protocol ${protocolVersion}; fast-firebird requires Firebird 3+ (protocol 13)`,
     );
   }
+
+  // Compression covers every byte after the accept packet, both directions.
+  const compressed = (accept.type & PFLAG_COMPRESS) !== 0;
+  if (compressed) wire.transport.enableCompression();
 
   let sessionKey: Buffer | null = null;
   let dpbAuthData: string | null = null;
@@ -216,8 +226,10 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
   if (wantCrypt && sessionKey && /(^|[,\s])Arc4([,\s]|$)/.test(keys || 'Arc4')) {
     wire.writer.int32(Op.crypt).string('Arc4').string('Symmetric');
     wire.flush();
-    // RC4 starts immediately after op_crypt is sent; the response is encrypted.
-    wire.transport.addFilter(new Arc4Filter(sessionKey));
+    // RC4 starts immediately after op_crypt is sent (the response comes back
+    // encrypted); with compression active, tx-encryption engages only after
+    // the compressor drains op_crypt itself.
+    await wire.transport.installCrypt(new Arc4Filter(sessionKey));
     await wire.readResponse();
     encrypted = true;
   } else if (opts.wireCrypt === WireCryptLevel.required) {
@@ -231,6 +243,7 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
     dpbAuthData,
     pendingAuth,
     encrypted,
+    compressed,
   };
 }
 
