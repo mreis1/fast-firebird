@@ -29,6 +29,39 @@
 ## Tests
 Drizzle CRUD + transactions against FB3/4/5 docker matrix; type round-trips.
 
+## Implementation approach (decided 2026-07-09, drizzle-orm 0.45.3)
+
+Studied pg-core (Firebird ≈ Postgres: RETURNING, `"..."` quoting, generators).
+Key constraints found:
+- pg-core `buildSelectQuery` (dialect.ts:341) builds `limit`/`offset` INLINE
+  (lines 414-418) — no `buildLimit` hook. Firebird rejects the `LIMIT` keyword;
+  it needs `OFFSET n ROWS FETCH FIRST m ROWS ONLY` (FB3+, offset before fetch).
+  → must override `buildSelectQuery` (+ set-operator variant).
+- pg placeholders are `$1,$2,…`; the Session receives the built SQL string and
+  must translate to Firebird `?` positional params (our driver uses `?`).
+- Reusing pg COLUMN types risks wrong `mapToDriverValue` (e.g. pg timestamp →
+  string) vs our encoder (native Date/number/bigint/Buffer). Correct value
+  mapping needs Firebird-aware column types.
+
+**Chosen path — reuse pg-core machinery, Firebird-correct where it matters:**
+- Reuse `PgDatabase` + query builders (they call the dialect; pg insert/update/
+  delete already emit RETURNING + `"` quoting — Firebird-compatible).
+- `FirebirdDialect extends PgDialect`, override `buildSelectQuery` /
+  set-operator building for `OFFSET/FETCH` (FB rejects `LIMIT`).
+- Firebird column types that EXTEND `PgColumn`/`PgColumnBuilder` with:
+  `getSQLType()` → Firebird types, and IDENTITY `mapFromDriverValue`/
+  `mapToDriverValue` (our driver already returns native Date/number/Buffer, so
+  pg's string-based mappers would corrupt SELECT results — this is the crux).
+  `firebirdTable` = thin wrapper over `pgTable`.
+- Custom `FirebirdSession`/`FirebirdPreparedQuery` over `@fast-firebird/core`:
+  translate `$n` → `?` (track param order), run via `Attachment`/`Transaction`,
+  map rows via drizzle `mapResultRow`, transactions via our tx.
+- `drizzle(connection)` entry mirroring node-postgres/driver.ts `construct()`.
+- Defer: relational query API, views, migrations (drizzle-kit).
+
+Alternative (rejected for v1): reuse `pgTable` + pg columns verbatim — faster
+but emits pg value mappings and reads oddly ("pg" tables for Firebird).
+
 ## Status
-Not started. Begins after M2 (query layer) stabilizes. Study of drizzle-orm
-dialect internals happens right before implementation (fast-moving upstream).
+Package scaffolded (`@fast-firebird/drizzle`). Architecture research in
+`plans/research/drizzle-internals.md`. Implementing the dialect next.

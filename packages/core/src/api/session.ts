@@ -35,6 +35,13 @@ export interface QueryOptions {
   exclude?: string[];
   /** If set, keep ONLY these columns (applied before `exclude`). */
   only?: string[];
+  /**
+   * Row shape: 'object' (default, keyed by column name) or 'array'
+   * (positional, preserving duplicate/aliased columns). Array mode is intended
+   * for ORM adapters; `exclude`/`only` are ignored. In array mode
+   * `QueryResult.rows` holds `unknown[]` per row.
+   */
+  rowMode?: 'object' | 'array';
 }
 
 /** A network-op serializer (Attachment.withLock). */
@@ -107,6 +114,7 @@ function isBlobType(t: number): boolean {
 class RowMapper {
   private readonly keys: (string | null)[]; // null = column dropped
   private readonly lazy: boolean;
+  private readonly arrayMode: boolean;
   private readonly scope: BlobScope | null;
   /** Per column: text codec for a subtype-1 (text) blob, else null. */
   private readonly blobCodec: (TextCodec | null)[];
@@ -122,13 +130,15 @@ class RowMapper {
     const only = run.query.only?.map((s) => s.toLowerCase());
     const exclude = new Set(run.query.exclude?.map((s) => s.toLowerCase()) ?? []);
     this.lazy = (run.query.blobs ?? ctx.opts.blobs) === 'lazy';
+    this.arrayMode = run.query.rowMode === 'array';
     this.blobCodec = [];
     let keptEagerBlobs = false;
 
     this.keys = outputs.map((d, i) => {
       const rawName = d.alias || d.field || `F${i + 1}`;
       const lower = rawName.toLowerCase();
-      const kept = (!only || only.includes(lower)) && !exclude.has(lower);
+      // Array mode keeps every column positionally (exclude/only ignored).
+      const kept = this.arrayMode || ((!only || only.includes(lower)) && !exclude.has(lower));
       this.blobCodec[i] = isBlobType(d.type) && d.subType === 1 ? codecForDesc(d, ctx.opts, 'blob') : null;
       if (kept && isBlobType(d.type) && !this.lazy) keptEagerBlobs = true;
       return kept ? (lc ? lower : rawName) : null;
@@ -160,14 +170,20 @@ class RowMapper {
     }
   }
 
-  /** Build the result object; wraps remaining BlobRefs as lazy Blob handles. */
+  /** Build the result row: an object (default) or a positional array. */
   shape(row: unknown[]): Row {
+    const wrap = (cell: unknown, i: number): unknown =>
+      cell instanceof BlobRef ? new Blob(cell.id, cell.subType, this.scope!, this.blobCodec[i] ?? null) : cell;
+    if (this.arrayMode) {
+      // Positional array in column order (cast: callers opting into rowMode
+      // 'array' treat QueryResult.rows as unknown[][]).
+      return row.map(wrap) as unknown as Row;
+    }
     const obj: Row = {};
     for (let i = 0; i < this.keys.length; i++) {
       const key = this.keys[i];
       if (key == null) continue;
-      const cell = row[i];
-      obj[key] = cell instanceof BlobRef ? new Blob(cell.id, cell.subType, this.scope!, this.blobCodec[i] ?? null) : cell;
+      obj[key] = wrap(row[i], i);
     }
     return obj;
   }
@@ -275,7 +291,12 @@ async function prepareParams(
       prepared[i] = new BlobRef(id, d.subType);
     } else {
       prepared[i] = v;
-      if (typeof v === 'string') paramCodecs.set(i, codecForDesc(d, opts, 'text'));
+      // A text codec only applies to genuine text columns: for those, `subType`
+      // is a charset id. For non-text targets (NUMERIC, INT, …) `subType` is
+      // the numeric/other subtype — misreading it as a charset can pick OCTETS
+      // (which rejects strings). Send such string params as plain UTF-8 bytes
+      // and let Firebird coerce them to the column type (e.g. '12.5' → NUMERIC).
+      if (typeof v === 'string' && isTextType(d.type)) paramCodecs.set(i, codecForDesc(d, opts, 'text'));
     }
   }
   const encodeText = (i: number, value: string): Buffer => {

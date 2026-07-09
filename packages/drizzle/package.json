@@ -1,0 +1,34 @@
+{
+  "name": "@fast-firebird/drizzle",
+  "version": "0.1.0",
+  "description": "Drizzle ORM dialect and driver for Firebird, powered by @fast-firebird/core",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --sourcemap --clean",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fast-firebird/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "drizzle-orm": ">=0.44.0"
+  },
+  "devDependencies": {
+    "drizzle-orm": "^0.45.0",
+    "tsup": "^8.4.0"
+  },
+  "keywords": ["firebird", "drizzle", "drizzle-orm", "orm", "sql"]
+}

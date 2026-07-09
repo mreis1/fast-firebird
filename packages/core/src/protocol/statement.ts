@@ -95,12 +95,17 @@ export async function executeStatement(
 ): Promise<ExecuteResult> {
   const useExecute2 = usesExecute2(stmt.description);
 
+  // Encode the parameters BEFORE touching the shared writer: a bad parameter
+  // must fail cleanly, never leave a half-written op_execute in the buffer
+  // (which would then be flushed alongside the error-path teardown and desync
+  // the wire, deadlocking the connection).
+  const encoded = values.length > 0 ? encodeParams(values, encodeText, () => new XdrWriter(256)) : null;
+
   const w = wire.writer;
   w.int32(useExecute2 ? Op.execute2 : Op.execute).int32(stmt.handle).int32(txHandle);
-  if (values.length > 0) {
-    const { blr, message } = encodeParams(values, encodeText, () => new XdrWriter(256));
-    w.opaque(blr).int32(0).int32(1);
-    w.raw(message);
+  if (encoded) {
+    w.opaque(encoded.blr).int32(0).int32(1);
+    w.raw(encoded.message);
   } else {
     w.opaque(Buffer.alloc(0)).int32(0).int32(0);
   }

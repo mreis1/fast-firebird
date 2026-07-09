@@ -118,7 +118,13 @@ only when API surface stabilizes (avoid premature package fragmentation).
 - [ ] `plans/projection.md` — `SELECT *` rewrite (`expandStar`) DEFERRED/future
 
 ### M6 — Ecosystem
-- [ ] Drizzle dialect + adapter (`plans/drizzle.md`)
+- [x] Drizzle dialect + adapter (`plans/drizzle.md`) — `@fast-firebird/drizzle`:
+      FirebirdDialect (`?` params, upper-folded quoting, FIRST/SKIP pagination,
+      multi-row INSERT rewritten to `SELECT … UNION ALL` with per-column CASTs),
+      session/prepared-query/transaction, driver `drizzle(attachment)`, Firebird
+      column types (timestamp/date/time/blob/blobText). 30 integration tests
+      (CRUD, where, pagination, RETURNING, tx commit/rollback, all column types)
+      green on FB3/4/5. Surfaced+fixed a core param-coercion/wire-desync bug (below).
 - [ ] node-firebird/node-firebird2 compat layer + migration guide
 - [ ] Benchmarks: localhost + simulated latency (tc/toxiproxy), blob throughput, charset overhead
 - [ ] Docs site / README polish; CI (GitHub Actions with FB 3/4/5 service containers)
@@ -129,5 +135,9 @@ only when API surface stabilizes (avoid premature package fragmentation).
   strictly isolated per `plans/docker-safety.md`.
 - Regression: `CHARSET NONE` + win1252 round-trips (€, smart quotes, em dash).
 
-## Current status (2026-07-08)
-M0 nearly done; M1 implementation starting. See `diary/2026-07-08.md`.
+## Current status (2026-07-09)
+M0–M5.5 complete; M6 Drizzle adapter done (`@fast-firebird/drizzle`, 30 tests on
+FB3/4/5). Core: 318 tests green. A core param-coercion/wire-desync bug (string
+param → NUMERIC column) was surfaced by the Drizzle work and fixed. Remaining M6:
+node-firebird compat layer + migration guide, CI, benchmark expansion. See
+`diary/2026-07-09.md` (session 9).
