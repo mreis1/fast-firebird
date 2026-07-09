@@ -144,6 +144,25 @@ error/break); `tx.queryStream` streams within a transaction you own. Don't run
 other statements on the *same* connection mid-stream — use another connection
 or the pool for concurrency.
 
+## Transactions
+
+```ts
+const tx = await db.startTransaction({ isolation: 'readCommitted', readOnly: true });
+const rows = await tx.query('select first 1 1 as v from rdb$database');
+
+await tx.restart();                        // commit + reopen, same strategy
+await tx.restart({ action: 'rollback' });  // rollback + reopen, same strategy
+await tx.restart({ readOnly: false });     // commit + reopen with a new strategy
+
+await tx.execute('insert into t (id) values (?) returning id', [1]);
+await tx.commit();
+```
+
+`restart` reuses the same `Transaction` object (its `handle` changes) — handy
+for long-running loops that periodically checkpoint. It commits by default;
+pass `action: 'rollback'` to discard. Lazy blob handles from before a restart
+become invalid (reading one throws `FirebirdBlobError`).
+
 ## Blobs: eager (default) or lazy handles
 
 By default blob columns are materialized (Buffer, or decoded string for

@@ -108,7 +108,9 @@ only when API surface stabilizes (avoid premature package fragmentation).
       Connect timeout now covers the handshake (not just TCP).
 - [x] Column `exclude`/`only` (decode-time; drops columns + skips unneeded BLOB
       materialization). 33 tests; verified unread blobs cost zero round trips.
-- [ ] Transaction `restart()` + stored options; opt-in `autoUpgradeReadOnly`
+- [x] Transaction `restart(options?)` — commit(default)/rollback + reopen,
+      reuses or replaces isolation strategy; tx-generation invalidates prior
+      lazy blob handles. 18 tests. (autoUpgradeReadOnly: deferred, opt-in later.)
 - [ ] Pool blob-parallel helper (`pool.materialize`, honest single-conn note)
 - [ ] `plans/projection.md` — `SELECT *` rewrite (`expandStar`) DEFERRED/future
 
