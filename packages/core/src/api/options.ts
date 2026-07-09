@@ -24,6 +24,8 @@ export interface FirebirdConnectionOptions {
   wireCrypt?: WireCryptOption;
   /** zlib wire compression (server needs WireCompression=true). Default off. */
   wireCompression?: boolean;
+  /** Wire-crypt cipher: 'Arc4' (default), 'ChaCha' or 'ChaCha64' (FB4+). */
+  wireCryptPlugin?: 'Arc4' | 'ChaCha' | 'ChaCha64';
   authPlugin?: 'Srp256' | 'Srp' | 'auto';
 
   blobAsText?: boolean;
@@ -69,6 +71,7 @@ export interface ResolvedOptions {
   connectTimeoutMs: number;
   wireCrypt: WireCryptLevel;
   wireCompression: boolean;
+  wireCryptPlugin: string | undefined;
   authPlugin: string | undefined;
   blobAsText: boolean;
   blobWriteChunkSize: number;
@@ -103,6 +106,7 @@ export function resolveOptions(raw: FirebirdConnectionOptions & LegacyOptionAlia
     connectTimeoutMs: raw.connectTimeoutMs ?? raw.connectTimeout ?? 10_000,
     wireCrypt: WIRE_CRYPT_MAP[raw.wireCrypt ?? 'enabled'],
     wireCompression: raw.wireCompression ?? false,
+    wireCryptPlugin: raw.wireCryptPlugin,
     authPlugin: raw.authPlugin === 'auto' ? undefined : (raw.authPlugin ?? (raw.pluginName as string | undefined)),
     blobAsText: raw.blobAsText ?? false,
     // Wire maximum by default — blob throughput is round-trip-bound.

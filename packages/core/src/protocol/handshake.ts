@@ -14,6 +14,7 @@ import {
 import { ParamBuffer } from './buffers.js';
 import { computeProof, generateEphemeral, parseServerAuthData } from './auth/srp.js';
 import { Arc4Filter } from './crypt/arc4.js';
+import { ChaChaFilter } from './crypt/chacha.js';
 import { FirebirdAuthError, FirebirdProtocolError } from '../api/errors.js';
 import type { WireConnection } from './wire.js';
 
@@ -24,6 +25,8 @@ export interface HandshakeOptions {
   wireCrypt: WireCryptLevel;
   /** Request zlib wire compression (server must have WireCompression on). */
   wireCompression?: boolean;
+  /** Wire-crypt plugin to request: Arc4 (default), ChaCha, ChaCha64. */
+  wireCryptPlugin?: string;
   authPlugin?: string; // default: first of AUTH_PLUGIN_LIST
   /** @internal Deterministic SRP ephemeral seed — testing only. */
   srpSeed?: Buffer;
@@ -52,6 +55,8 @@ export interface HandshakeResult {
   pendingAuth: PendingAuth | null;
   /** True when the wire is now encrypted. */
   encrypted: boolean;
+  /** Negotiated wire-crypt plugin name (Arc4/ChaCha/ChaCha64), or null. */
+  cryptPlugin: string | null;
   /** True when zlib wire compression was negotiated. */
   compressed: boolean;
 }
@@ -165,6 +170,8 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
   let activePlugin = accept.pluginName || plugin;
   let serverData = accept.data;
   let keys = accept.keys;
+  /** Raw p_resp_data clumplet blob carrying wire-crypt plugin IVs, if any. */
+  let serverKeyData: Buffer = Buffer.alloc(0);
 
   if (!accept.isAuthenticated || accept.op === Op.cond_accept) {
     // op_cond_accept with no data: server wants continuation rounds now.
@@ -202,7 +209,8 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
         for (;;) {
           const op = await wire.readOp();
           if (op === Op.response) {
-            await wire.parseResponseBody();
+            const resp = await wire.parseResponseBody();
+            if (resp.data.length > 0) serverKeyData = resp.data; // may carry crypt IV
             break;
           }
           if (op === Op.cont_auth) {
@@ -244,17 +252,39 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
 
   // Wire encryption.
   let encrypted = false;
+  let cryptPlugin: string | null = null;
   const wantCrypt = opts.wireCrypt !== WireCryptLevel.disabled;
-  if (wantCrypt && sessionKey && /(^|[,\s])Arc4([,\s]|$)/.test(keys || 'Arc4')) {
-    wire.writer.int32(Op.crypt).string('Arc4').string('Symmetric');
-    wire.flush();
-    // RC4 starts immediately after op_crypt is sent (the response comes back
-    // encrypted); with compression active, tx-encryption engages only after
-    // the compressor drains op_crypt itself.
-    await wire.transport.installCrypt(new Arc4Filter(sessionKey));
-    await wire.readResponse();
-    encrypted = true;
-  } else if (opts.wireCrypt === WireCryptLevel.required) {
+  if (wantCrypt && sessionKey) {
+    const plugin = selectCryptPlugin(keys, opts.wireCryptPlugin);
+    if (plugin) {
+      cryptPlugin = plugin;
+      wire.writer.int32(Op.crypt).string(plugin).string('Symmetric');
+      wire.flush();
+      if (plugin === 'Arc4') {
+        // RC4 engages the instant op_crypt is sent — the response comes back
+        // encrypted. (With compression active, installCrypt waits for the
+        // compressor to drain op_crypt before engaging tx-encryption.)
+        await wire.transport.installCrypt(new Arc4Filter(sessionKey));
+        await wire.readResponse();
+      } else {
+        // ChaCha (FB4+, protocol ≥16): the server pre-shares its IV in the
+        // clumplet blob it sent with the auth-completing op_response
+        // (TAG_PLUGIN_SPECIFIC), NOT in the op_crypt response. Engage crypt
+        // BEFORE reading the op_crypt response, which arrives encrypted.
+        const iv = findPluginIv(serverKeyData, plugin);
+        if (!iv) {
+          throw new FirebirdAuthError(
+            `Server did not advertise a ${plugin} IV; this server build only supports Arc4 wire encryption. ` +
+              `Use wireCryptPlugin:'Arc4' (default) or wireCrypt:'disabled'.`,
+          );
+        }
+        await wire.transport.installCrypt(new ChaChaFilter(sessionKey, iv));
+        await wire.readResponse();
+      }
+      encrypted = true;
+    }
+  }
+  if (!encrypted && opts.wireCrypt === WireCryptLevel.required) {
     throw new FirebirdAuthError('wireCrypt=required but wire encryption could not be established');
   }
 
@@ -265,8 +295,53 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
     dpbAuthData,
     pendingAuth,
     encrypted,
+    cryptPlugin,
     compressed,
   };
+}
+
+/**
+ * Choose the wire-crypt plugin to request.
+ *
+ * The Firebird servers we target send an EMPTY `keys` advertisement during the
+ * accept (that channel is used for db-crypt key exchange, not a plain plugin
+ * list), so there is no reliable capability signal. Arc4 ships with every
+ * FB3+ server, so it is the safe default. ChaCha/ChaCha64 (FB4+) are opt-in
+ * via `wireCryptPlugin`. When the server DOES advertise a plugin list we honor
+ * it as a filter on the requested plugin.
+ */
+const TAG_PLUGIN_SPECIFIC = 3;
+
+/**
+ * Extract a wire-crypt plugin's IV from a server key-data clumplet blob
+ * (`UnTagged` format: `[tag:1][len:1][data:len]`). A TAG_PLUGIN_SPECIFIC
+ * entry holds `<plugin-name>\0<specific-data>`; for ChaCha the specific data
+ * is the IV. Returns null when the plugin isn't present. See
+ * firebird remote.cpp rem_port::addServerKeys.
+ */
+function findPluginIv(blob: Buffer, plugin: string): Buffer | null {
+  let pos = 0;
+  while (pos + 2 <= blob.length) {
+    const tag = blob[pos]!;
+    const len = blob[pos + 1]!;
+    const data = blob.subarray(pos + 2, pos + 2 + len);
+    pos += 2 + len;
+    if (tag !== TAG_PLUGIN_SPECIFIC) continue;
+    const nul = data.indexOf(0);
+    if (nul <= 0) continue;
+    if (data.toString('latin1', 0, nul) === plugin) return Buffer.from(data.subarray(nul + 1));
+  }
+  return null;
+}
+
+function selectCryptPlugin(keys: string, requested?: string): string | null {
+  const want = requested ?? 'Arc4';
+  if (!keys) return want; // no advertisement → trust the request
+  const lower = keys.toLowerCase();
+  const advertised = (name: string) => new RegExp(`(^|[,\\s:\\0])${name}([,\\s\\0]|$)`).test(lower);
+  if (advertised(want.toLowerCase())) return want;
+  // Requested plugin not advertised: degrade to Arc4 if offered, else give up.
+  return advertised('arc4') ? 'Arc4' : null;
 }
 
 /**

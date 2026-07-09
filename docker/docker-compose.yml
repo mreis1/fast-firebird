@@ -43,6 +43,10 @@ services:
     container_name: fast-firebird-test-fb4
     ports:
       - "127.0.0.1:30504:3050"
+    environment:
+      <<: *fb-env
+      # FB4+ supports ChaCha; offer all so the driver can negotiate the best.
+      FIREBIRD_CONF_WireCryptPlugin: ChaCha20, ChaCha, ChaCha64, Arc4
     volumes:
       - fast-firebird-test-fb4-data:/var/lib/firebird/data
 
@@ -52,6 +56,9 @@ services:
     container_name: fast-firebird-test-fb5
     ports:
       - "127.0.0.1:30505:3050"
+    environment:
+      <<: *fb-env
+      FIREBIRD_CONF_WireCryptPlugin: ChaCha20, ChaCha, ChaCha64, Arc4
     volumes:
       - fast-firebird-test-fb5-data:/var/lib/firebird/data
 

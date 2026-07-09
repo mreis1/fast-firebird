@@ -64,6 +64,7 @@ export class Attachment {
         password: opts.password,
         wireCrypt: opts.wireCrypt,
         wireCompression: opts.wireCompression,
+        wireCryptPlugin: opts.wireCryptPlugin,
         authPlugin: opts.authPlugin,
         srpSeed: opts.srpSeed,
       });
@@ -85,6 +86,11 @@ export class Attachment {
 
   get wireEncrypted(): boolean {
     return this.handshake.encrypted;
+  }
+
+  /** Negotiated wire-crypt plugin (Arc4/ChaCha/ChaCha64), or null. */
+  get wireCryptPlugin(): string | null {
+    return this.handshake.cryptPlugin;
   }
 
   get wireCompressed(): boolean {
