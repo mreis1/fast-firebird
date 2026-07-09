@@ -8,8 +8,9 @@ first-class support for **Firebird 3, 4, and 5**.
 > encryption; zlib compression), transactions, a statement cache, prepared
 > statements, all scalar types, text & binary blobs, adaptive fetching, row
 > streaming, connection pooling, and the legacy `CHARSET NONE` toolkit are
-> implemented and verified by 200 tests against real FB 3/4/5 servers.
-> See `plans/000-roadmap.md` for what's next.
+> implemented and verified by 248 tests against real FB 3/4/5 servers.
+> Events (`POST_EVENT`), the Services API, and a multi-statement script parser
+> round out M5. See `plans/000-roadmap.md` for what's next.
 
 ```ts
 import { connect } from '@fast-firebird/core';
@@ -161,6 +162,53 @@ Each pooled connection is a full `Attachment` with its own statement cache, so
 warm statements survive across acquire/release. The pool enforces `max`
 concurrency, validates connections with `op_ping` on borrow, evicts idle
 connections down to `min`, and times out `acquire` when saturated.
+
+## Multi-statement scripts
+
+```ts
+await db.executeScript(`
+  set term ^ ;
+  create or alter procedure add_log (msg varchar(100)) as
+  begin
+    insert into audit_log (message) values (:msg);
+  end^
+  set term ; ^
+  execute procedure add_log('migrated');
+`);
+```
+
+The parser is isql-faithful: honors `SET TERM`, PSQL bodies (no naive `;`
+splitting), string/quoted-identifier/`q'…'` literals, and `--` / `/* */`
+comments, with line/column error positions. `executeScript` supports
+`transaction: 'perScript' | 'perStatement' | 'none'`, `continueOnError`, and an
+`onProgress` callback. `parseScript(sql)` is also exported standalone.
+
+## Events (POST_EVENT)
+
+```ts
+const events = await db.events(['order_placed', 'stock_low']);
+events.on('order_placed', (count) => refreshOrders());
+events.on('post', (name, count) => console.log(name, count));
+// … later
+await events.close();
+```
+
+Uses Firebird's async event channel (a separate socket), so it never blocks
+queries on the connection. The first delivery per event is a silent baseline —
+only posts occurring after subscription fire. Firebird's one-shot requests are
+re-armed automatically. *(Docker note: the async channel needs a fixed,
+published `RemoteAuxPort` — see `docker/docker-compose.yml`.)*
+
+## Services API
+
+```ts
+import { connectService } from '@fast-firebird/core';
+
+const svc = await connectService({ host, user: 'SYSDBA', password: 'masterkey' });
+const info = await svc.getServerInfo();      // version, implementation, security db
+const stats = await svc.getStatistics('/data/app.fdb');  // gstat output
+await svc.disconnect();
+```
 
 ## Wire encryption & compression
 

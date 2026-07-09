@@ -29,6 +29,15 @@ export class ParamBuffer {
     return this.bytes(tag, encode(value));
   }
 
+  /** tag + 2-byte little-endian length + bytes (SpbStart "StringSpb" clumplets). */
+  string2(tag: number, value: string, encode: (s: string) => Buffer = (s) => Buffer.from(s, 'utf8')): this {
+    const data = encode(value);
+    if (data.length > 0xffff) throw new Error(`Parameter buffer item too long: ${data.length}`);
+    this.parts.push(tag, data.length & 0xff, (data.length >> 8) & 0xff);
+    for (const b of data) this.parts.push(b);
+    return this;
+  }
+
   /** tag + len=1 + unsigned byte. */
   byte(tag: number, value: number): this {
     this.parts.push(tag, 1, value & 0xff);

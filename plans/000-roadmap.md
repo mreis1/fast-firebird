@@ -87,10 +87,16 @@ only when API surface stabilizes (avoid premature package fragmentation).
 - [x] Segmented blob read/write with configurable chunk sizes (done in M2)
 - [ ] Blob *streaming* APIs (chunk-level Readable/Writable) — still buffered per value
 
-### M5 — Events, services, scripts
-- [ ] POST_EVENT listening (aux connection)
-- [ ] Services API (backup/restore/stats)
-- [ ] Script parser (SET TERM, PSQL bodies, comments, strings) + executeScript
+### M5 — Events, services, scripts ✅ (2026-07-09)
+- [x] Script parser (isql-faithful: SET TERM, PSQL bodies, comments, string/
+      q-literal/quoted-ident, line/col errors) + `executeScript` (perScript/
+      perStatement/none tx modes, continueOnError, progress). 27 tests.
+- [x] POST_EVENT listening: per-attachment shared async channel (aux port,
+      rid-demuxed op_que_events/op_event, auto re-arm, baseline suppression,
+      FIN-not-RST teardown for FB3), `Attachment.events()` EventEmitter. 9 tests.
+- [x] Services API: `connectService` → server version/implementation/sec-db
+      info + gstat statistics (SPB v2 doubled header, SpbStart 2-byte strings).
+      12 tests. Backup/restore actions: future (same start+output plumbing).
 
 ### M6 — Ecosystem
 - [ ] Drizzle dialect + adapter (`plans/drizzle.md`)

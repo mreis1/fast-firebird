@@ -296,6 +296,48 @@ export const enum IscArg {
 export const ISC_SQLERR = 335544436;
 /** gds code carrying the SQLCODE in an isc_arg_number that follows it. */
 
+// ── Services (SPB + service info items) ────────────────────────────────────
+export const enum Spb {
+  current_version = 2,
+  version3 = 3,
+  user_name = 28, // = isc_dpb_user_name
+  password = 29,
+  specific_auth_data = 111, // = isc_spb_trusted_auth
+  auth_plugin_name = 116,
+  auth_plugin_list = 117,
+  utf8_filename = 118,
+  dbname = 106,
+  expected_db = 124,
+}
+
+export const enum SvcInfo {
+  svr_db_info = 50,
+  get_config = 53,
+  version = 54,
+  server_version = 55,
+  implementation = 56,
+  capabilities = 57,
+  user_dbpath = 58,
+  get_env = 59,
+  get_env_lock = 60,
+  get_env_msg = 61,
+  line = 62,
+  to_eof = 63,
+  timeout = 64,
+  stdin = 78,
+}
+
+export const enum SvcAction {
+  db_stats = 11,
+}
+
+export const enum Info {
+  end = 1,
+  truncated = 2,
+}
+
+export const SERVICE_MGR = 'service_mgr';
+
 // ── Events ─────────────────────────────────────────────────────────────────
 export const EPB_VERSION1 = 1;
 export const P_REQ_ASYNC = 1;
