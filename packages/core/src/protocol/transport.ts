@@ -195,6 +195,11 @@ export class Transport {
     return this.rx.length;
   }
 
+  /** True while the socket is usable (not errored, not closed). */
+  get isOpen(): boolean {
+    return !this.error && !this.closed;
+  }
+
   /** Send one packet through the pipeline. */
   write(data: Buffer): void {
     if (this.error) throw this.error;

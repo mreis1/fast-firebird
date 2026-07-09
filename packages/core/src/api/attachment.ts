@@ -8,6 +8,7 @@ import { StatementCache } from './statement-cache.js';
 import { PreparedStatement } from './prepared.js';
 import { Transaction } from './transaction.js';
 import { resolveOptions, type FirebirdConnectionOptions, type LegacyOptionAliases, type ResolvedOptions } from './options.js';
+import { Op } from '../protocol/constants.js';
 import type { ParamValue } from '../protocol/msgcodec.js';
 
 export type ConnectInput = FirebirdConnectionOptions & LegacyOptionAliases;
@@ -173,6 +174,20 @@ export class Attachment {
   /** Run a single statement in its own transaction; returns affected count. */
   async execute(sql: string, params: ParamValue[] = []): Promise<number> {
     return (await this.run(sql, params)).rowsAffected;
+  }
+
+  /** True while the connection is usable (socket open, not detached). */
+  get isAlive(): boolean {
+    return !this.detached && this.wire.transport.isOpen;
+  }
+
+  /** Cheap liveness check via op_ping (one round trip). */
+  async ping(): Promise<void> {
+    await this.withLock(async () => {
+      this.wire.writer.int32(Op.ping);
+      this.wire.flush();
+      await this.wire.readResponse();
+    });
   }
 
   async disconnect(): Promise<void> {
