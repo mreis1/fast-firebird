@@ -8,6 +8,7 @@ import {
   readRecordCounts,
   type PreparedStatementInfo,
 } from '../protocol/statement.js';
+import { nextFetchCount } from '../protocol/fetch-plan.js';
 import { readBlob, writeBlob } from '../protocol/blob.js';
 import { BlobRef, makeColumnReader, type ParamValue } from '../protocol/msgcodec.js';
 import { resolveTextCodec, type TextCodec, type TextCodecOptions } from '../charset/decoder.js';
@@ -127,8 +128,11 @@ export async function executePrepared(
 
   const stmtType = info.description.stmtType;
   const isSelect = isSelectType(stmtType);
+  // Adaptive fetch: the piggybacked first batch starts modest, later batches
+  // ramp toward the byte budget (see fetch-plan.ts).
+  let fetchCount = isSelect ? nextFetchCount(info.rowWidth, opts.fetchSize, 0) : 0;
   const exec = await executeStatement(wire, info, txHandle, prepared, encodeText, {
-    fetchSize: isSelect ? opts.fetchSize : undefined,
+    fetchSize: isSelect ? fetchCount : undefined,
     recordCounts: wantsRecordCounts(stmtType),
   });
 
@@ -138,7 +142,8 @@ export async function executePrepared(
     let batch = await readFetchBatch(wire, info);
     rows.push(...batch.rows);
     while (!batch.eof) {
-      batch = await fetchRows(wire, info, opts.fetchSize);
+      fetchCount = nextFetchCount(info.rowWidth, opts.fetchSize, fetchCount);
+      batch = await fetchRows(wire, info, fetchCount);
       rows.push(...batch.rows);
     }
   } else if (exec.procRow) {

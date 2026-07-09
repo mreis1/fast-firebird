@@ -1,6 +1,7 @@
 import { DEFAULT_FETCH_SIZE, FreeStatement, Op, SqlInfo, StmtType } from './constants.js';
 import { DESCRIBE_INFO_ITEMS, parseDescribe, parseRecordCounts, type RecordCounts, type StatementDescription } from './info.js';
 import { buildOutputBlr, encodeParams, makeColumnReader, readRow, type ColumnReader, type ParamValue } from './msgcodec.js';
+import { estimateRowWidth } from './fetch-plan.js';
 import { XdrWriter } from './xdr.js';
 import { FirebirdProtocolError } from '../api/errors.js';
 import type { WireConnection } from './wire.js';
@@ -13,6 +14,8 @@ export interface PreparedStatementInfo {
   description: StatementDescription;
   outputBlr: Buffer;
   columnReaders: ColumnReader[];
+  /** Estimated wire bytes per output row (drives adaptive fetch sizing). */
+  rowWidth: number;
 }
 
 /**
@@ -46,7 +49,8 @@ export async function allocateAndPrepare(
   // Text codecs are attached by the caller once column metadata is known.
   const columnReaders = description.outputs.map((d) => makeColumnReader(d, null, int64As));
   const outputBlr = description.outputs.length > 0 ? buildOutputBlr(description.outputs) : Buffer.alloc(0);
-  return { handle, description, outputBlr, columnReaders };
+  const rowWidth = estimateRowWidth(description.outputs);
+  return { handle, description, outputBlr, columnReaders, rowWidth };
 }
 
 /** Statement types whose results come back via op_execute2 (singleton row). */
