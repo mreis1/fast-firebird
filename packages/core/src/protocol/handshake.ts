@@ -22,6 +22,8 @@ export interface HandshakeOptions {
   password: string;
   wireCrypt: WireCryptLevel;
   authPlugin?: string; // default: first of AUTH_PLUGIN_LIST
+  /** @internal Deterministic SRP ephemeral seed — testing only. */
+  srpSeed?: Buffer;
 }
 
 export interface PendingAuth {
@@ -123,7 +125,7 @@ export function sendContAuth(wire: WireConnection, authData: string, plugin: str
 
 export async function performHandshake(wire: WireConnection, opts: HandshakeOptions): Promise<HandshakeResult> {
   const plugin = opts.authPlugin ?? AUTH_PLUGIN_LIST.split(',')[0]!;
-  const ephemeral = generateEphemeral();
+  const ephemeral = generateEphemeral(opts.srpSeed);
 
   const w = wire.writer;
   w.int32(Op.connect)

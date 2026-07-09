@@ -31,6 +31,12 @@ export class WireConnection {
   readonly writer = new XdrWriter(4096);
   /** Negotiated protocol version; set by the handshake. */
   protocolVersion = 13;
+  /**
+   * Packet flushes so far — a faithful proxy for round trips, since every
+   * flush is followed by at least one awaited response. First-class metric
+   * per plans/performance.md; tests assert budgets against it.
+   */
+  flushCount = 0;
   /** Deferred (lazy-send) operations whose responses are pending, FIFO. */
   private deferredResponses = 0;
 
@@ -38,6 +44,7 @@ export class WireConnection {
 
   flush(): void {
     if (this.writer.length === 0) return;
+    this.flushCount++;
     this.transport.write(this.writer.finish());
   }
 

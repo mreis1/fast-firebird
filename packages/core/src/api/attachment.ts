@@ -3,7 +3,9 @@ import { WireConnection } from '../protocol/wire.js';
 import { performHandshake, type HandshakeResult } from '../protocol/handshake.js';
 import { attachDatabase, createDatabase, detachDatabase, dropDatabase } from '../protocol/attach.js';
 import { startTransaction, type TransactionOptions } from '../protocol/transaction.js';
-import { runStatement, type QueryResult, type Row } from './session.js';
+import { prepareInfo, runStatement, type QueryResult, type Row, type SessionContext } from './session.js';
+import { StatementCache } from './statement-cache.js';
+import { PreparedStatement } from './prepared.js';
 import { Transaction } from './transaction.js';
 import { resolveOptions, type FirebirdConnectionOptions, type LegacyOptionAliases, type ResolvedOptions } from './options.js';
 import type { ParamValue } from '../protocol/msgcodec.js';
@@ -15,13 +17,30 @@ export class Attachment {
   private detached = false;
   /** Serializes wire operations — one logical op at a time per connection. */
   private opChain: Promise<unknown> = Promise.resolve();
+  /** @internal */
+  readonly session: SessionContext;
 
   private constructor(
     readonly wire: WireConnection,
     readonly options: ResolvedOptions,
     readonly handshake: HandshakeResult,
     readonly dbHandle: number,
-  ) {}
+  ) {
+    this.session = {
+      wire,
+      dbHandle,
+      opts: options,
+      cache: options.statementCacheSize > 0 ? new StatementCache(wire, options.statementCacheSize) : null,
+    };
+  }
+
+  /**
+   * Packet flushes performed on this connection so far (≈ round trips).
+   * Useful for performance assertions and diagnostics.
+   */
+  get roundTrips(): number {
+    return this.wire.flushCount;
+  }
 
   /** @internal */
   withLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -45,6 +64,7 @@ export class Attachment {
         password: opts.password,
         wireCrypt: opts.wireCrypt,
         authPlugin: opts.authPlugin,
+        srpSeed: opts.srpSeed,
       });
       const handle =
         mode === 'create'
@@ -98,13 +118,33 @@ export class Attachment {
     return (await this.run(sql, params)).rows;
   }
 
+  /**
+   * Prepare a statement for repeated execution (pinned outside the LRU
+   * cache). Close it when done.
+   */
+  async prepare(sql: string): Promise<PreparedStatement> {
+    const tx = await this.startTransaction();
+    try {
+      const info = await this.withLock(() => prepareInfo(this.session, tx.handle, sql));
+      await tx.commit(); // statements outlive the preparing transaction
+      return new PreparedStatement(this, info, sql);
+    } catch (err) {
+      if (!tx.isFinished) {
+        try {
+          await tx.rollback();
+        } catch {
+          /* surface the original error */
+        }
+      }
+      throw err;
+    }
+  }
+
   /** Run a single statement in its own transaction; returns rows + count. */
   async run(sql: string, params: ParamValue[] = []): Promise<QueryResult> {
     const tx = await this.startTransaction();
     try {
-      const result = await this.withLock(() =>
-        runStatement(this.wire, this.dbHandle, tx.handle, sql, params, this.options),
-      );
+      const result = await this.withLock(() => runStatement(this.session, tx.handle, sql, params));
       await tx.commit();
       return result;
     } catch (err) {
@@ -129,6 +169,8 @@ export class Attachment {
     this.detached = true;
     try {
       await detachDatabase(this.wire);
+    } catch {
+      // Connection already dead — closing the socket is all that's left.
     } finally {
       this.wire.close();
     }

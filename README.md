@@ -75,11 +75,40 @@ Docker usage follows strict isolation rules (`plans/docker-safety.md`): every
 resource is named `fast-firebird-test-*`, cleanup is scoped to the compose
 project, and no global prune command is ever used.
 
+## Prepared statements & the statement cache
+
+Every connection keeps an LRU cache of prepared statements keyed by SQL text
+(`statementCacheSize`, default 64; `0` disables). Measured round trips,
+asserted by integration tests on FB 3/4/5:
+
+| Operation (inside an open transaction) | Round trips |
+|-----------------------------------------|-------------|
+| cold query (prepare → rows)             | 2           |
+| warm query, ≤ `fetchSize` rows          | **1** (execute + fetch coalesced) |
+| warm DML including affected count       | **1** (execute + counts coalesced) |
+
+For hot paths you can also pin a statement explicitly:
+
+```ts
+const stmt = await db.prepare('select name from users where id = ?');
+const rows = await stmt.query([42], tx); // 1 round trip per execution
+await stmt.close();
+```
+
+> **Metadata-lock caveat** (standard Firebird behavior): a prepared statement —
+> cached or pinned — holds existence locks on the objects it references, so
+> DDL on those tables from *other* connections waits until the statement is
+> released. DDL executed through the same connection clears the cache
+> automatically. Set `statementCacheSize: 0` if your workload mixes long-lived
+> connections with external migrations.
+
 ## Design highlights
 
 - **Round-trip frugality**: statement allocate+prepare pipelined into one round
-  trip (lazy-send), deferred `op_free_statement`/`op_close_blob`, batched fetch
-  (400 rows/trip by default, configurable).
+  trip (lazy-send), execute+first-fetch and execute+record-counts coalesced
+  into single packets, deferred `op_free_statement`/`op_close_blob`, batched
+  fetch (400 rows/trip by default, configurable). `Attachment.roundTrips`
+  exposes the flush counter for your own budget assertions.
 - **Faithful SRP**: Firebird's non-standard SRP-6a variant (modPow proof mixing,
   `(a + u·x) mod N`, SHA-1 session key) implemented with `node:crypto` + BigInt.
 - **Real error messages**: complete gds→message table (2539 entries) generated

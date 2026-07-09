@@ -50,11 +50,20 @@ only when API surface stabilizes (avoid premature package fragmentation).
 - [ ] Statement cache / reusable PreparedStatement objects (M3)
 - [ ] op_execute affected-counts piggyback avoidance (extra RT today for DML)
 
-### M3 — Security & performance
-- [ ] WireCrypt (Arc4/ChaCha) — Arc4 first
+### M3 — Security & performance (statement cache + RT work ✅ 2026-07-09)
+- [x] Statement cache: per-connection LRU keyed by SQL (`statementCacheSize`,
+      default 64), DDL clears it, deferred close/drop, format-error re-prepare
+      retry. Documented metadata-lock caveat (foreign DDL blocks on cached stmts).
+- [x] Public `PreparedStatement` API (`att.prepare` → query/run/execute/close)
+- [x] Execute+first-fetch and execute+record-counts coalesced into one packet;
+      measured & test-asserted: warm select/DML = 1 RT, cold = 2 RT
+- [x] `Attachment.roundTrips` flush counter (first-class perf metric)
+- [x] INSERT/UPDATE/DELETE ... RETURNING via op_execute2
+- [x] SRP scramble fix: minimal (stripped) key bytes per srp.cpp — killed the
+      ~1/128 intermittent login failure; deterministic short-key regression test
 - [ ] WireCompression (zlib)
-- [ ] Batched fetch with configurable fetch size; prepared statement reuse
-- [ ] Pipelining/deferred packets where safe (jaybird-style lazy responses)
+- [ ] ChaCha wire crypt (FB4+)
+- [ ] Adaptive fetch sizing; benchmark harness vs node-firebird under latency
 
 ### M4 — Blobs, streaming, pooling
 - [ ] Segmented blob read/write; streaming APIs with backpressure

@@ -33,6 +33,16 @@ export interface FirebirdConnectionOptions {
   charsetNoneEncoding?: string;
   transcodeAdapter?: FirebirdTranscodeAdapter;
   charsetOverrides?: Record<string, string>;
+
+  /**
+   * Prepared statements kept per connection, keyed by SQL text (LRU).
+   * A cache hit makes repeat queries a single round trip. 0 disables.
+   * Default 64.
+   */
+  statementCacheSize?: number;
+
+  /** @internal Deterministic SRP ephemeral seed — testing only. */
+  srpSeed?: Buffer;
 }
 
 /** Legacy node-firebird option names accepted at the boundary. */
@@ -64,6 +74,8 @@ export interface ResolvedOptions {
   charsetNoneEncoding: string | undefined;
   transcodeAdapter: FirebirdTranscodeAdapter | undefined;
   charsetOverrides: Record<string, string> | undefined;
+  statementCacheSize: number;
+  srpSeed: Buffer | undefined;
 }
 
 const WIRE_CRYPT_MAP: Record<WireCryptOption, WireCryptLevel> = {
@@ -95,5 +107,7 @@ export function resolveOptions(raw: FirebirdConnectionOptions & LegacyOptionAlia
     charsetNoneEncoding: raw.charsetNoneEncoding,
     transcodeAdapter: raw.transcodeAdapter,
     charsetOverrides: raw.charsetOverrides,
+    statementCacheSize: clamp(raw.statementCacheSize ?? 64, 0, 10_000),
+    srpSeed: raw.srpSeed,
   };
 }

@@ -27,9 +27,7 @@ export class Transaction {
   /** Run a statement and return rows + affected-record count. */
   async run(sql: string, params: ParamValue[] = []): Promise<QueryResult> {
     this.assertActive();
-    return this.att.withLock(() =>
-      runStatement(this.att.wire, this.att.dbHandle, this.handle, sql, params, this.att.options),
-    );
+    return this.att.withLock(() => runStatement(this.att.session, this.handle, sql, params));
   }
 
   /** Run a statement, returning only the affected-record count. */

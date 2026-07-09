@@ -1026,3 +1026,15 @@ Purpose: DBs declared `CHARSET NONE` that physically store a legacy codepage
   `blobReadChunkSize`, `sessionTimeZone`, `parallelWorkers`, `maxInlineBlobSize`,
   `defaultSchema`, `searchPath`, `cacheQuery`, `maxCachedQuery`,
   `retryConnectionInterval`, `dbCryptConfig`, `encoding`, `lowercase_keys`.
+
+---
+
+## ERRATA (verified against firebird source + live servers, 2026-07-09)
+
+- §4.3 claims `u = SHA1(pad(A) || pad(B))` (128-byte padded). **Wrong for the
+  server**: srp.cpp `computeScramble` uses `processStrippedInt` → u hashes the
+  MINIMAL (leading-zero-stripped) big-endian bytes of A and B. node-firebird's
+  padded variant fails ~1/128 handshakes (whenever A or B < 128 bytes) — this
+  is likely a long-standing latent bug there. fast-firebird uses minimal bytes.
+- §4.3 M1 user-hash component: `SHA1(upper(user))` is additionally passed
+  through BigInteger (leading zeros stripped) before hashing into M.

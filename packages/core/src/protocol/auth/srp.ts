@@ -87,10 +87,14 @@ export interface SrpEphemeral {
 }
 
 export function generateEphemeral(seed?: Buffer): SrpEphemeral {
-  // Reduce mod N: without this a fraction of handshakes fail (research §4.3).
-  const a = bufferToBigInt(seed ?? randomBytes(KEY_BYTES)) % N;
-  const A = modPow(g, a, N);
-  return { a, A, publicHex: A.toString(16) };
+  for (;;) {
+    // Reduce mod N: without this a fraction of handshakes fail (research §4.3).
+    const a = bufferToBigInt(seed ?? randomBytes(KEY_BYTES)) % N;
+    const A = modPow(g, a, N);
+    // Server-mirrored guard (srp.cpp genClientKey): regenerate if A ≤ 1.
+    if (A > 1n) return { a, A, publicHex: A.toString(16) };
+    if (seed) throw new Error('Provided SRP seed produces a trivial public key');
+  }
 }
 
 export interface SrpProof {
@@ -112,7 +116,11 @@ export function computeProof(
   if (B % N === 0n) throw new Error('Invalid SRP server key (B ≡ 0 mod N)');
   const userUpper = Buffer.from(user.toUpperCase(), 'utf8');
 
-  const u = hashBigInt(pad(ephemeral.A), pad(B));
+  // Scramble hashes the MINIMAL (leading-zero-stripped) key bytes — the
+  // server uses processStrippedInt (srp.cpp computeScramble). Hashing
+  // 128-byte padded keys instead fails ~1/128 of logins (short A or B).
+  const u = hashBigInt(bigIntToBuffer(ephemeral.A), bigIntToBuffer(B));
+  // k = SHA1(N ‖ g padded to N's length) — RemoteGroup ctor pads here (only here).
   const k = hashBigInt(pad(N), pad(g));
   const x = bufferToBigInt(sha1(salt, sha1(Buffer.concat([userUpper, Buffer.from(':'), Buffer.from(password, 'utf8')]))));
 
@@ -126,11 +134,12 @@ export function computeProof(
 
   // n1 = H(N)^H(g) mod N — Firebird quirk (modPow, not XOR).
   const n1 = modPow(hashBigInt(bigIntToBuffer(N)), hashBigInt(bigIntToBuffer(g)), N);
-  const userHash = sha1(userUpper);
+  // n2 = H(user) fed through BigInteger — minimal bytes, leading zeros stripped.
+  const n2 = bufferToBigInt(sha1(userUpper));
 
   const h = createHash(proofHashFor(plugin));
   h.update(bigIntToBuffer(n1));
-  h.update(userHash);
+  h.update(bigIntToBuffer(n2));
   h.update(salt);
   h.update(bigIntToBuffer(ephemeral.A));
   h.update(bigIntToBuffer(B));

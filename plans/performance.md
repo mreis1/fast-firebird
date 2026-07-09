@@ -3,25 +3,38 @@
 Firebird's reputation for chatty remote connections is the #1 thing this driver
 must fix relative to legacy Node drivers.
 
-## Round-trip budget (targets)
+## Round-trip budget — MEASURED (integration-test asserted, 2026-07-09)
 
-| Operation                         | node-firebird today | fast-firebird target |
-|-----------------------------------|---------------------|----------------------|
-| connect+attach                    | 3–4 RTs             | 2–3 RTs (auth folded into connect where server allows) |
-| simple query (prepare→rows)       | 4–5 RTs             | 2 RTs (allocate deferred; prepare+info one packet; execute+first fetch batched) |
-| repeated query (stmt cache)       | 3–4 RTs             | 1 RT (execute+fetch pipelined) |
-| fetch N rows                      | N/fetchSize RTs     | configurable large fetch batches (default 400 rows or ~1MB cap) |
+`Attachment.roundTrips` counts packet flushes; tests in
+`test/integration/statement-cache.test.ts` assert these numbers on FB3/4/5:
+
+| Operation (inside an open transaction)   | node-firebird | fast-firebird measured |
+|-------------------------------------------|---------------|------------------------|
+| cold query (prepare→rows)                 | 4–5 RTs       | **2 RTs** (allocate+prepare one flush; execute+first-fetch one flush) |
+| warm query, ≤fetchSize rows (stmt cache)  | 3–4 RTs       | **1 RT** (execute+fetch coalesced) |
+| warm DML incl. affected count             | 3–4 RTs       | **1 RT** (execute+info coalesced) |
+| one-shot `db.query` warm                  | 5–6 RTs       | **3 RTs** (tx start / work / commit) |
+| fetch N rows                              | N/200 RTs     | N/400 RTs (configurable `fetchSize`) |
+
+Deferred (0-RT) operations riding with the next packet: statement DSQL_close
+after cursor EOF, DSQL_drop on cache eviction, blob close after read.
 
 ## Tactics
 
-1. **Deferred packets** (jaybird lazy-send model): op_allocate_statement and
-   op_free_statement(DSQL_close) written without waiting; responses consumed FIFO.
-2. **Fetch batching**: op_fetch requests `fetchSize` rows in ONE response stream;
-   make fetchSize adaptive (rows small → bigger batches) and user-configurable.
-3. **Statement cache**: LRU of prepared statements keyed by (sql, tx-dialect flags),
-   opt-out-able. Reuse avoids prepare/describe cycles entirely.
-4. **Single-flush writes**: coalesce op sequences (e.g. execute immediately followed
-   by fetch) into one socket write.
+1. ✅ **Deferred packets** (jaybird lazy-send model): op_free_statement/op_close_blob
+   written without waiting; responses consumed FIFO (`WireConnection.markDeferred`).
+2. ✅ **Fetch batching**: 400 rows per op_fetch by default, `fetchSize` configurable.
+   Adaptive sizing: future.
+3. ✅ **Statement cache**: LRU keyed by exact SQL (`statementCacheSize`, default 64,
+   0 disables). DDL on the connection clears it. **Caveat (measured on FB3/4/5):
+   cached statements hold metadata existence locks — foreign DDL on referenced
+   tables blocks until eviction/disconnect. Documented in README. Also measured:
+   the server hard-closes the connection if an unknown statement handle is used,
+   so cache staleness cannot be probed server-side; the re-prepare retry in
+   session.ts only fires for format errors (gds 335544343).**
+4. ✅ **Single-flush writes**: execute+first-fetch (selects) and execute+record-counts
+   (DML) coalesced into one packet; error paths drain piggybacked responses via the
+   deferred-response mechanism.
 5. **Buffer discipline**: pooled scratch buffers for XDR encode; subarray views for
    decode; decode strings lazily only when the column is actually read? — measure
    first; eager is simpler and usually wins for full-row consumption.
