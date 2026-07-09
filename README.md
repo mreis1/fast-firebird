@@ -214,6 +214,19 @@ warm statements survive across acquire/release. The pool enforces `max`
 concurrency, validates connections with `op_ping` on borrow, evicts idle
 connections down to `min`, and times out `acquire` when saturated.
 
+For parallel work, `pool.map` runs a function over items across connections
+with bounded concurrency (results in input order):
+
+```ts
+const parts = await pool.map(idRanges, (conn, range) =>
+  conn.query('select * from big where id between ? and ?', [range.lo, range.hi]),
+  { concurrency: 4 },
+);
+```
+
+(A lazy `Blob` handle is bound to the connection+transaction that produced it,
+so parallelize by running the *query* per partition — not by sharing handles.)
+
 ## Multi-statement scripts
 
 ```ts

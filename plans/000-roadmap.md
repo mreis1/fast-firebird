@@ -98,7 +98,7 @@ only when API surface stabilizes (avoid premature package fragmentation).
       info + gstat statistics (SPB v2 doubled header, SpbStart 2-byte strings).
       12 tests. Backup/restore actions: future (same start+output plumbing).
 
-### M5.5 — Core hardening & DX (planned 2026-07-09; see plans/dx.md)
+### M5.5 — Core hardening & DX ✅ (2026-07-09; see plans/dx.md)
 - [x] Legacy_Auth plugin (DES crypt(3), UTF-8 password bytes) — verified live on
       a Legacy_Auth server; `authPlugin:'Legacy_Auth'`. Clear error when a
       WireCrypt=Disabled server refuses op_crypt. 6 crypt-vector + 4 integration tests.
@@ -111,7 +111,10 @@ only when API surface stabilizes (avoid premature package fragmentation).
 - [x] Transaction `restart(options?)` — commit(default)/rollback + reopen,
       reuses or replaces isolation strategy; tx-generation invalidates prior
       lazy blob handles. 18 tests. (autoUpgradeReadOnly: deferred, opt-in later.)
-- [ ] Pool blob-parallel helper (`pool.materialize`, honest single-conn note)
+- [x] Pool parallelism helper `pool.map(items, fn, {concurrency})` — bounded
+      concurrent work across pooled connections, results in order. Honest note:
+      lazy blob handles can't cross connections, so parallelize by running the
+      *query* per partition inside `fn`, not by sharing handles. 1 test.
 - [ ] `plans/projection.md` — `SELECT *` rewrite (`expandStar`) DEFERRED/future
 
 ### M6 — Ecosystem

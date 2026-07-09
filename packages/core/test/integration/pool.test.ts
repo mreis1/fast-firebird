@@ -112,6 +112,27 @@ describe('connection pool (Firebird 5)', () => {
     }
   });
 
+  it('map runs work across connections in order with bounded concurrency', async () => {
+    let concurrent = 0;
+    let peak = 0;
+    const items = [1, 2, 3, 4, 5, 6, 7, 8];
+    const out = await pool.map(
+      items,
+      async (conn, n) => {
+        concurrent++;
+        peak = Math.max(peak, concurrent);
+        const [r] = await conn.query('select cast(? as integer) * 10 as v from rdb$database', [n]);
+        await new Promise((res) => setTimeout(res, 20));
+        concurrent--;
+        return r!.V as number;
+      },
+      { concurrency: 3 },
+    );
+    expect(out).toEqual(items.map((n) => n * 10)); // in input order
+    expect(peak).toBeGreaterThan(1); // genuinely parallel
+    expect(peak).toBeLessThanOrEqual(3); // respected concurrency cap
+  });
+
   it('rejects use after close', async () => {
     const p = await createPool({ ...FB_BASE, port: fb5.port });
     await p.close();

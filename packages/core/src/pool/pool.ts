@@ -193,6 +193,37 @@ export class Pool {
     }
   }
 
+  /**
+   * Run `fn` over `items` across pooled connections with bounded concurrency
+   * (default = pool `max`), returning results in input order. Each call gets
+   * its own borrowed connection, so this is the way to do genuinely parallel
+   * work — e.g. partition a large query by key range and fetch each partition
+   * (including its blobs) concurrently.
+   *
+   * NOTE: a lazy `Blob` handle is bound to the connection + transaction that
+   * produced it and cannot be read on another connection, so you cannot fan a
+   * single result set's blob handles across the pool — run the *query* per
+   * partition inside `fn` instead.
+   */
+  async map<T, R>(
+    items: readonly T[],
+    fn: (conn: Attachment, item: T, index: number) => Promise<R>,
+    opts: { concurrency?: number } = {},
+  ): Promise<R[]> {
+    const limit = Math.max(1, Math.min(opts.concurrency ?? this.max, this.max));
+    const results = new Array<R>(items.length);
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const i = cursor++;
+        if (i >= items.length) return;
+        results[i] = await this.use((conn) => fn(conn, items[i]!, i));
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+    return results;
+  }
+
   query(sql: string, params: ParamValue[] = []): Promise<Row[]> {
     return this.use((c) => c.query(sql, params));
   }
