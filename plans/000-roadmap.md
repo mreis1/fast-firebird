@@ -98,6 +98,14 @@ only when API surface stabilizes (avoid premature package fragmentation).
       info + gstat statistics (SPB v2 doubled header, SpbStart 2-byte strings).
       12 tests. Backup/restore actions: future (same start+output plumbing).
 
+### M5.5 — Core hardening & DX (planned 2026-07-09; see plans/dx.md)
+- [ ] Legacy_Auth plugin (DES crypt(3)) — migration blocker; verify live
+- [ ] Lazy blobs + blob streaming (`Blob.buffer/text/stream`); eager stays default
+- [ ] Column `exclude`/`only` (decode-time; skips unneeded BLOB materialization)
+- [ ] Transaction `restart()` + stored options; opt-in `autoUpgradeReadOnly`
+- [ ] Pool blob-parallel helper (`pool.materialize`, honest single-conn note)
+- [ ] `plans/projection.md` — `SELECT *` rewrite (`expandStar`) DEFERRED/future
+
 ### M6 — Ecosystem
 - [ ] Drizzle dialect + adapter (`plans/drizzle.md`)
 - [ ] node-firebird/node-firebird2 compat layer + migration guide
