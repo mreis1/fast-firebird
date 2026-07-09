@@ -1,7 +1,7 @@
 import { Readable } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { connect, FirebirdBlobError, type Attachment, type Blob } from '../../src/index.js';
-import { FB_BASE, FB_SERVERS, HOOK_TIMEOUT, ddl } from './env.js';
+import { FB_BASE, FB_SERVERS, HOOK_TIMEOUT, ddl, freshDb } from './env.js';
 
 describe.each(FB_SERVERS)('lazy blobs on Firebird $version', ({ port, version }) => {
   let db: Attachment;
@@ -9,7 +9,7 @@ describe.each(FB_SERVERS)('lazy blobs on Firebird $version', ({ port, version })
   const N = 40;
 
   beforeAll(async () => {
-    db = await connect({ ...FB_BASE, port });
+    db = await freshDb(port);
     await ddl(db, `recreate table ${t} (id integer, b1 blob, b2 blob, memo blob sub_type text)`);
     await db.transaction(async (tx) => {
       for (let i = 1; i <= N; i++) {
@@ -24,7 +24,7 @@ describe.each(FB_SERVERS)('lazy blobs on Firebird $version', ({ port, version })
   }, HOOK_TIMEOUT);
 
   afterAll(async () => {
-    await db?.disconnect();
+    await db?.dropDatabase();
   });
 
   it('non-null blobs become handles; unread ones cost zero round trips', async () => {
@@ -128,13 +128,13 @@ describe.each(FB_SERVERS)('column exclude/only on Firebird $version', ({ port, v
   const t = `T_EXCL_${version}`;
 
   beforeAll(async () => {
-    db = await connect({ ...FB_BASE, port });
+    db = await freshDb(port);
     await ddl(db, `recreate table ${t} (id integer, name varchar(20), big blob)`);
     await db.execute(`insert into ${t} values (1, 'alice', ?)`, [Buffer.alloc(5000, 0x41)]);
   }, HOOK_TIMEOUT);
 
   afterAll(async () => {
-    await db?.disconnect();
+    await db?.dropDatabase();
   });
 
   it('exclude drops columns from the row and skips blob materialization', async () => {

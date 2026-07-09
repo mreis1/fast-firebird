@@ -1,20 +1,20 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { connect, type Attachment } from '../../src/index.js';
-import { FB_BASE, FB_SERVERS, HOOK_TIMEOUT, ddl } from './env.js';
+import { FB_BASE, FB_SERVERS, HOOK_TIMEOUT, ddl, freshDb } from './env.js';
 
 describe.each(FB_SERVERS)('statement cache & round trips on Firebird $version', ({ port, version }) => {
   let db: Attachment;
   const table = `T_CACHE_${version}`;
 
   beforeAll(async () => {
-    db = await connect({ ...FB_BASE, port });
+    db = await freshDb(port);
     await ddl(db, `recreate table ${table} (id integer not null primary key, name varchar(40))`);
     await db.execute(`insert into ${table} values (1, 'one')`);
     await db.execute(`insert into ${table} values (2, 'two')`);
   }, HOOK_TIMEOUT);
 
   afterAll(async () => {
-    await db?.disconnect();
+    await db?.dropDatabase();
   });
 
   it('a warm cached select costs exactly ONE round trip inside a transaction', async () => {

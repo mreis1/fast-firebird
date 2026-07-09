@@ -1,15 +1,41 @@
-import { commitTransaction, rollbackTransaction } from '../protocol/transaction.js';
+import {
+  commitTransaction,
+  rollbackTransaction,
+  startTransaction,
+  type TransactionOptions,
+} from '../protocol/transaction.js';
 import { runStatement, streamRows, type QueryOptions, type QueryResult, type RunContext, type Row } from './session.js';
 import type { ParamValue } from '../protocol/msgcodec.js';
 import type { Attachment } from './attachment.js';
 
+export interface RestartOptions extends TransactionOptions {
+  /** Finish the current transaction by 'commit' (default) or 'rollback'. */
+  action?: 'commit' | 'rollback';
+}
+
+/** Keys that constitute a transaction strategy (vs the `action` control). */
+function hasStrategy(o: RestartOptions): boolean {
+  return o.isolation !== undefined || o.readOnly !== undefined || o.wait !== undefined || o.autoCommit !== undefined;
+}
+
 export class Transaction {
   private finished = false;
+  private currentHandle: number;
+  /** Bumped on restart so lazy blob handles from a prior cycle read as dead. */
+  private generation = 0;
 
   constructor(
     private readonly att: Attachment,
-    readonly handle: number,
-  ) {}
+    handle: number,
+    private options: TransactionOptions,
+  ) {
+    this.currentHandle = handle;
+  }
+
+  /** Server-side transaction handle (changes across `restart`). */
+  get handle(): number {
+    return this.currentHandle;
+  }
 
   get isFinished(): boolean {
     return this.finished;
@@ -19,9 +45,10 @@ export class Transaction {
     if (this.finished) throw new Error('Transaction already committed or rolled back');
   }
 
-  /** @internal Run context binding lazy-blob validity to this transaction. */
+  /** @internal Run context binding lazy-blob validity to this tx generation. */
   private runContext(options?: QueryOptions): RunContext {
-    return { query: options ?? {}, txAlive: () => !this.finished && this.att.isAlive };
+    const gen = this.generation;
+    return { query: options ?? {}, txAlive: () => !this.finished && this.generation === gen && this.att.isAlive };
   }
 
   /** Run a statement and return its rows. */
@@ -71,5 +98,36 @@ export class Transaction {
   async rollbackRetaining(): Promise<void> {
     this.assertActive();
     await this.att.withLock(() => rollbackTransaction(this.att.wire, this.handle, true));
+  }
+
+  /**
+   * Finish the current transaction and immediately start a fresh one on the
+   * same connection, reusing the same isolation strategy — or a new one if
+   * transaction options are supplied. Reuses this `Transaction` object (its
+   * `handle` changes). Any lazy blob handles from before the restart become
+   * invalid (reading them throws `FirebirdBlobError`).
+   *
+   * ```ts
+   * await tx.restart();                         // commit, reopen, same strategy
+   * await tx.restart({ action: 'rollback' });   // rollback, reopen, same strategy
+   * await tx.restart({ readOnly: false });      // commit, reopen with a new strategy
+   * ```
+   */
+  async restart(options: RestartOptions = {}): Promise<void> {
+    const action = options.action ?? 'commit';
+    if (!this.finished) {
+      await this.att.withLock(() =>
+        action === 'rollback'
+          ? rollbackTransaction(this.att.wire, this.currentHandle)
+          : commitTransaction(this.att.wire, this.currentHandle),
+      );
+    }
+    if (hasStrategy(options)) {
+      const { action: _drop, ...strategy } = options;
+      this.options = strategy;
+    }
+    this.currentHandle = await this.att.withLock(() => startTransaction(this.att.wire, this.att.dbHandle, this.options));
+    this.generation++;
+    this.finished = false;
   }
 }

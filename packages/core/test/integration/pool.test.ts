@@ -1,17 +1,23 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createPool, type Pool } from '../../src/index.js';
-import { FB_BASE, FB_SERVERS, withRetry, HOOK_TIMEOUT } from './env.js';
+import { createDatabase, createPool, type Pool } from '../../src/index.js';
+import { FB_BASE, FB_SERVERS, HOOK_TIMEOUT, nextDatabasePath, dropDatabaseAt } from './env.js';
 
 const fb5 = FB_SERVERS.find((s) => s.version === 5)!;
 
 describe('connection pool (Firebird 5)', () => {
   let pool: Pool;
+  let dbPath: string;
   beforeAll(async () => {
-    pool = await createPool({ ...FB_BASE, port: fb5.port, min: 1, max: 3, idleTimeoutMs: 500 });
-    await withRetry(() => pool.transaction((tx) => tx.execute('recreate table t_pool (id integer primary key, v varchar(20))'), { wait: false }));
+    // Isolated database so the pool's DDL never contends with other suites.
+    dbPath = nextDatabasePath(fb5.port);
+    const seed = await createDatabase({ ...FB_BASE, port: fb5.port, database: dbPath });
+    await seed.execute('create table t_pool (id integer primary key, v varchar(20))');
+    await seed.disconnect();
+    pool = await createPool({ ...FB_BASE, port: fb5.port, database: dbPath, min: 1, max: 3, idleTimeoutMs: 500 });
   }, HOOK_TIMEOUT);
   afterAll(async () => {
     await pool.close();
+    await dropDatabaseAt(fb5.port, dbPath);
   });
 
   it('runs queries via the pool convenience methods', async () => {

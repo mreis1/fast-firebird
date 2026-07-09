@@ -1,5 +1,5 @@
 export { connect, create as createDatabase, Attachment, type ConnectInput } from './api/attachment.js';
-export { Transaction } from './api/transaction.js';
+export { Transaction, type RestartOptions } from './api/transaction.js';
 export { PreparedStatement } from './api/prepared.js';
 export { Pool, createPool, type PoolOptions, type PoolStats } from './pool/pool.js';
 export { parseScript, ScriptParseError, type ParsedStatement, type ParseScriptOptions } from './script/parser.js';

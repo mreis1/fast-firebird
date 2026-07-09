@@ -58,3 +58,26 @@ export async function withRetry<T>(fn: () => Promise<T>, attempts = 8): Promise<
 export async function ddl(db: import('../../src/index.js').Attachment, sql: string): Promise<void> {
   await withRetry(() => db.transaction((tx) => tx.execute(sql), { wait: false }), 25);
 }
+
+// vitest does NOT strictly serialize test files even with fileParallelism:false
+// + singleFork, so files' beforeAll DDL runs concurrently and conflicts on the
+// SHARED database's system tables. The fix: each DDL-heavy suite gets its OWN
+// database — zero cross-file metadata contention regardless of scheduling.
+let dbSeq = 0;
+
+export function nextDatabasePath(port: number): string {
+  return `/var/lib/firebird/data/it_${port}_${process.pid}_${dbSeq++}.fdb`;
+}
+
+/** Create a brand-new isolated database for a test suite. Drop it in afterAll. */
+export async function freshDb(port: number): Promise<import('../../src/index.js').Attachment> {
+  const { createDatabase } = await import('../../src/index.js');
+  return createDatabase({ ...FB_BASE, port, database: nextDatabasePath(port) });
+}
+
+/** Drop an isolated database created via `nextDatabasePath` (best-effort). */
+export async function dropDatabaseAt(port: number, database: string): Promise<void> {
+  const { connect } = await import('../../src/index.js');
+  const db = await connect({ ...FB_BASE, port, database });
+  await db.dropDatabase();
+}

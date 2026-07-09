@@ -124,7 +124,7 @@ export class Attachment {
   /** Start an explicit transaction. */
   async startTransaction(options?: TransactionOptions): Promise<Transaction> {
     const handle = await this.withLock(() => startTransaction(this.wire, this.dbHandle, options));
-    return new Transaction(this, handle);
+    return new Transaction(this, handle, options ?? {});
   }
 
   /**

@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { connect, type Attachment } from '../../src/index.js';
-import { FB_BASE, FB_SERVERS, HOOK_TIMEOUT, ddl } from './env.js';
+import { FB_BASE, FB_SERVERS, HOOK_TIMEOUT, ddl, freshDb } from './env.js';
 
 describe.each(FB_SERVERS)('queries on Firebird $version', ({ port, version }) => {
   let db: Attachment;
   const table = `T_QUERY_${version}`;
 
   beforeAll(async () => {
-    db = await connect({ ...FB_BASE, port });
+    db = await freshDb(port);
     await ddl(
       db,
       `recreate table ${table} (
@@ -28,7 +28,7 @@ describe.each(FB_SERVERS)('queries on Firebird $version', ({ port, version }) =>
   }, HOOK_TIMEOUT);
 
   afterAll(async () => {
-    await db?.disconnect();
+    await db?.dropDatabase();
   });
 
   it('selects simple expressions', async () => {
