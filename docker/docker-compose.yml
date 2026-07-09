@@ -72,6 +72,24 @@ services:
     volumes:
       - fast-firebird-test-fb5-data:/var/lib/firebird/data
 
+  # Legacy_Auth server for testing the migration path (SRP disabled).
+  fblegacy:
+    <<: *fb-common
+    image: firebirdsql/firebird:3
+    container_name: fast-firebird-test-fblegacy
+    ports:
+      - "127.0.0.1:30506:3050"
+    environment:
+      <<: *fb-env
+      # Legacy_Auth enabled alongside SRP (SRP kept only so the image can
+      # provision SYSDBA); tests create a Legacy_UserManager user and log in
+      # via Legacy_Auth — the exact client path a legacy-only server uses.
+      FIREBIRD_CONF_AuthServer: Srp256, Srp, Legacy_Auth
+      FIREBIRD_CONF_UserManager: Srp, Legacy_UserManager
+      FIREBIRD_CONF_WireCrypt: Disabled
+    volumes:
+      - fast-firebird-test-fblegacy-data:/var/lib/firebird/data
+
 networks:
   fast-firebird-test-net:
     name: fast-firebird-test-net
@@ -83,3 +101,5 @@ volumes:
     name: fast-firebird-test-fb4-data
   fast-firebird-test-fb5-data:
     name: fast-firebird-test-fb5-data
+  fast-firebird-test-fblegacy-data:
+    name: fast-firebird-test-fblegacy-data

@@ -41,12 +41,28 @@ server. That is this feature.
 4. Re-prepare the rewritten SQL; cache it keyed by (original SQL, exclude set).
    One extra prepare per unique query, amortized by the statement cache.
 
+## Aliased rewrites — REQUIRED (user)
+
+Must support qualified stars, not just bare `*`:
+
+```
+SELECT ALIAS.* FROM T ALIAS            → SELECT ALIAS.COL_A, ALIAS.COL_B, ...
+SELECT TABLE_NAME.* FROM TABLE_NAME    → SELECT TABLE_NAME.COL_A, ...
+SELECT a.*, b.* FROM a JOIN b ON ...   → expand each independently, minus exclude
+```
+
+The describe response gives each output column's `relation` (source table) and
+`field`; combined with the FROM/JOIN aliases parsed from the SQL, map each
+`alias.*` / `table.*` to its column run and re-emit as `alias.COL` (preserving
+the qualifier so joins stay unambiguous). Bare `SELECT *` expands to all output
+columns. Exclude entries may be qualified (`ALIAS.COL_NOTES`) or bare (`COL_NOTES`).
+
 ## Why it needs a real parser (not a regex)
 
-- `SELECT t.*` vs bare `SELECT *` — must target the correct star.
+- `SELECT t.*` vs bare `SELECT *` vs `SELECT a.*, b.*` — target the correct star(s).
 - Joins where multiple tables each contribute a `*`.
 - `*` appearing inside a subquery or a string/identifier literal.
-- Alias collisions when expanding.
+- Alias collisions when expanding; preserve qualifiers to avoid ambiguity.
 
 Reuse the tokenizer discipline from `script/parser.ts` (string/quote/comment
 states) to locate the star at a true token boundary.

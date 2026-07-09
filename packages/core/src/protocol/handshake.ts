@@ -13,6 +13,7 @@ import {
 } from './constants.js';
 import { ParamBuffer } from './buffers.js';
 import { computeProof, generateEphemeral, parseServerAuthData } from './auth/srp.js';
+import { legacyHash } from './auth/legacy.js';
 import { Arc4Filter } from './crypt/arc4.js';
 import { ChaChaFilter } from './crypt/chacha.js';
 import { FirebirdAuthError, FirebirdProtocolError } from '../api/errors.js';
@@ -37,6 +38,8 @@ export interface PendingAuth {
   plugin: string;
   user: string;
   password: string;
+  /** Legacy_Auth DES-crypt token, when the plugin is Legacy_Auth. */
+  legacyToken?: string;
 }
 
 export interface HandshakeResult {
@@ -69,12 +72,12 @@ function addMultiblock(pb: ParamBuffer, tag: number, data: Buffer): void {
   }
 }
 
-function buildUserIdentification(opts: HandshakeOptions, publicHex: string, plugin: string): Buffer {
+function buildUserIdentification(opts: HandshakeOptions, plugin: string, pluginList: string, specificData: Buffer): Buffer {
   const pb = new ParamBuffer();
   pb.string(Cnct.login, opts.user);
   pb.string(Cnct.plugin_name, plugin);
-  pb.string(Cnct.plugin_list, AUTH_PLUGIN_LIST);
-  addMultiblock(pb, Cnct.specific_data, Buffer.from(publicHex, 'latin1'));
+  pb.string(Cnct.plugin_list, pluginList);
+  addMultiblock(pb, Cnct.specific_data, specificData);
   pb.bytes(Cnct.client_crypt, Buffer.from([opts.wireCrypt, 0, 0, 0])); // int32 LE
   let osUser = 'node';
   try {
@@ -134,8 +137,13 @@ export function sendContAuth(wire: WireConnection, authData: string, plugin: str
 }
 
 export async function performHandshake(wire: WireConnection, opts: HandshakeOptions): Promise<HandshakeResult> {
-  const plugin = opts.authPlugin ?? AUTH_PLUGIN_LIST.split(',')[0]!;
+  const isLegacy = opts.authPlugin === 'Legacy_Auth';
+  const plugin = isLegacy ? 'Legacy_Auth' : (opts.authPlugin ?? AUTH_PLUGIN_LIST.split(',')[0]!);
+  const pluginList = isLegacy ? 'Legacy_Auth' : AUTH_PLUGIN_LIST;
   const ephemeral = generateEphemeral(opts.srpSeed);
+  // Legacy_Auth: the DES crypt hash IS the auth token (no SRP salt/key rounds).
+  const legacyToken = isLegacy ? legacyHash(opts.password) : null;
+  const specificData = Buffer.from(isLegacy ? legacyToken! : ephemeral.publicHex, 'latin1');
 
   const w = wire.writer;
   w.int32(Op.connect)
@@ -144,7 +152,7 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
     .int32(ARCHITECTURE_GENERIC)
     .string(opts.database)
     .int32(SUPPORTED_PROTOCOLS.length)
-    .opaque(buildUserIdentification(opts, ephemeral.publicHex, plugin));
+    .opaque(buildUserIdentification(opts, plugin, pluginList, specificData));
   for (const [version, arch, minT, maxT, weight] of SUPPORTED_PROTOCOLS) {
     const max = opts.wireCompression ? maxT | PFLAG_COMPRESS : maxT;
     w.uint32(version).int32(arch).int32(minT).int32(max).int32(weight);
@@ -173,7 +181,37 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
   /** Raw p_resp_data clumplet blob carrying wire-crypt plugin IVs, if any. */
   let serverKeyData: Buffer = Buffer.alloc(0);
 
-  if (!accept.isAuthenticated || accept.op === Op.cond_accept) {
+  if (isLegacy && (!accept.isAuthenticated || accept.op === Op.cond_accept)) {
+    // Legacy_Auth is single-round: the DES hash was sent in CNCT_specific_data.
+    if (accept.op === Op.cond_accept) {
+      // Server wants the token via continuation.
+      sendContAuth(wire, legacyToken!, 'Legacy_Auth', 'Legacy_Auth');
+      for (;;) {
+        const op = await wire.readOp();
+        if (op === Op.response) {
+          await wire.parseResponseBody();
+          break;
+        }
+        if (op === Op.cont_auth) {
+          await wire.readOpaque();
+          await wire.readString();
+          await wire.readString();
+          await wire.readString();
+          // A re-offer means the legacy credentials were rejected.
+          throw new FirebirdAuthError(
+            'Your user name and password are not defined. Ask your database administrator to set up a Firebird login.',
+            335544472,
+            '28000',
+          );
+        }
+        throw new FirebirdProtocolError(`Unexpected op ${op} during Legacy_Auth continuation`);
+      }
+    } else {
+      // op_accept_data: the token rides in the attach DPB.
+      dpbAuthData = legacyToken;
+    }
+    pendingAuth = { ephemeral, plugin: 'Legacy_Auth', user: opts.user, password: opts.password, legacyToken: legacyToken! };
+  } else if (!accept.isAuthenticated || accept.op === Op.cond_accept) {
     // op_cond_accept with no data: server wants continuation rounds now.
     let rounds = 0;
     while (serverData.length === 0 && accept.op === Op.cond_accept) {
@@ -260,28 +298,38 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
       cryptPlugin = plugin;
       wire.writer.int32(Op.crypt).string(plugin).string('Symmetric');
       wire.flush();
-      if (plugin === 'Arc4') {
-        // RC4 engages the instant op_crypt is sent — the response comes back
-        // encrypted. (With compression active, installCrypt waits for the
-        // compressor to drain op_crypt before engaging tx-encryption.)
-        await wire.transport.installCrypt(new Arc4Filter(sessionKey));
-        await wire.readResponse();
-      } else {
-        // ChaCha (FB4+, protocol ≥16): the server pre-shares its IV in the
-        // clumplet blob it sent with the auth-completing op_response
-        // (TAG_PLUGIN_SPECIFIC), NOT in the op_crypt response. Engage crypt
-        // BEFORE reading the op_crypt response, which arrives encrypted.
-        const iv = findPluginIv(serverKeyData, plugin);
-        if (!iv) {
-          throw new FirebirdAuthError(
-            `Server did not advertise a ${plugin} IV; this server build only supports Arc4 wire encryption. ` +
-              `Use wireCryptPlugin:'Arc4' (default) or wireCrypt:'disabled'.`,
-          );
+      try {
+        if (plugin === 'Arc4') {
+          // RC4 engages the instant op_crypt is sent — the response comes back
+          // encrypted. (With compression active, installCrypt waits for the
+          // compressor to drain op_crypt before engaging tx-encryption.)
+          await wire.transport.installCrypt(new Arc4Filter(sessionKey));
+          await wire.readResponse();
+        } else {
+          // ChaCha (FB4+, protocol ≥16): the server pre-shares its IV in the
+          // clumplet blob it sent with the auth-completing op_response
+          // (TAG_PLUGIN_SPECIFIC), NOT in the op_crypt response. Engage crypt
+          // BEFORE reading the op_crypt response, which arrives encrypted.
+          const iv = findPluginIv(serverKeyData, plugin);
+          if (!iv) {
+            throw new FirebirdAuthError(
+              `Server did not advertise a ${plugin} IV; this server build only supports Arc4 wire encryption. ` +
+                `Use wireCryptPlugin:'Arc4' (default) or wireCrypt:'disabled'.`,
+            );
+          }
+          await wire.transport.installCrypt(new ChaChaFilter(sessionKey, iv));
+          await wire.readResponse();
         }
-        await wire.transport.installCrypt(new ChaChaFilter(sessionKey, iv));
-        await wire.readResponse();
+        encrypted = true;
+      } catch (err) {
+        // A server with WireCrypt=Disabled rejects op_crypt by dropping the
+        // connection. Give an actionable error instead of "connection closed".
+        if (err instanceof FirebirdAuthError) throw err;
+        throw new FirebirdAuthError(
+          `Wire encryption (${plugin}) was refused by the server — it likely has WireCrypt=Disabled. ` +
+            `Set wireCrypt:'disabled' on the client to connect unencrypted.`,
+        );
       }
-      encrypted = true;
     }
   }
   if (!encrypted && opts.wireCrypt === WireCryptLevel.required) {
@@ -362,6 +410,11 @@ export async function readResponseWithAuth(
       await wire.readString(); // plugin list
       await wire.readString(); // keys
       const usePlugin = nextPlugin || pending.plugin;
+      if (pending.legacyToken) {
+        // Legacy_Auth is one-shot; resend the DES token if asked again.
+        sendContAuth(wire, pending.legacyToken, 'Legacy_Auth', 'Legacy_Auth');
+        continue;
+      }
       if (data.length === 0) {
         sendContAuth(wire, pending.ephemeral.publicHex, usePlugin);
         continue;

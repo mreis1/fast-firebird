@@ -26,7 +26,7 @@ export interface FirebirdConnectionOptions {
   wireCompression?: boolean;
   /** Wire-crypt cipher: 'Arc4' (default), 'ChaCha' or 'ChaCha64' (FB4+). */
   wireCryptPlugin?: 'Arc4' | 'ChaCha' | 'ChaCha64';
-  authPlugin?: 'Srp256' | 'Srp' | 'auto';
+  authPlugin?: 'Srp256' | 'Srp' | 'Legacy_Auth' | 'auto';
 
   blobAsText?: boolean;
   blobWriteChunkSize?: number;

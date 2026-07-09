@@ -99,7 +99,9 @@ only when API surface stabilizes (avoid premature package fragmentation).
       12 tests. Backup/restore actions: future (same start+output plumbing).
 
 ### M5.5 — Core hardening & DX (planned 2026-07-09; see plans/dx.md)
-- [ ] Legacy_Auth plugin (DES crypt(3)) — migration blocker; verify live
+- [x] Legacy_Auth plugin (DES crypt(3), UTF-8 password bytes) — verified live on
+      a Legacy_Auth server; `authPlugin:'Legacy_Auth'`. Clear error when a
+      WireCrypt=Disabled server refuses op_crypt. 6 crypt-vector + 4 integration tests.
 - [ ] Lazy blobs + blob streaming (`Blob.buffer/text/stream`); eager stays default
 - [ ] Column `exclude`/`only` (decode-time; skips unneeded BLOB materialization)
 - [ ] Transaction `restart()` + stored options; opt-in `autoUpgradeReadOnly`

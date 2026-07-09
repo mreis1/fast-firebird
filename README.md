@@ -216,6 +216,23 @@ await svc.disconnect();
 await connect({ /* … */ wireCrypt: 'required', wireCompression: true });
 ```
 
+## Legacy authentication
+
+For migrating from legacy Firebird setups (`AuthServer = Legacy_Auth`):
+
+```ts
+const db = await connect({
+  host, database, user: 'MYUSER', password: 'secret',
+  authPlugin: 'Legacy_Auth',
+  wireCrypt: 'disabled',   // Legacy_Auth servers typically disable wire crypt
+});
+```
+
+Uses the DES `crypt(3)` hash (UTF-8 password bytes, matching node-firebird and
+fbclient). SRP256/SRP remain the default for modern servers.
+
+## Wire encryption & compression (continued)
+
 `wireCrypt` is `'enabled'` by default (Arc4, negotiated); `wireCompression`
 (zlib) is off by default and requires `WireCompression = true` on the server.
 When both are on, the wire is compressed then encrypted, matching fbclient.
