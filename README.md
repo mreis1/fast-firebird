@@ -4,10 +4,12 @@ A next-generation Firebird SQL driver for Node.js. Pure TypeScript, zero native
 dependencies, speaking the Firebird wire protocol directly (protocol 13–16) with
 first-class support for **Firebird 3, 4, and 5**.
 
-> **Status: early but real.** Connect (SRP256/Srp + Arc4 wire encryption),
-> transactions, prepared statements, all scalar types, text & binary blobs, and
-> the legacy `CHARSET NONE` toolkit are implemented and verified by integration
-> tests against real FB 3/4/5 servers. See `plans/000-roadmap.md` for what's next.
+> **Status: early but real.** Connect (SRP256/Srp auth; Arc4/ChaCha wire
+> encryption; zlib compression), transactions, a statement cache, prepared
+> statements, all scalar types, text & binary blobs, adaptive fetching, row
+> streaming, connection pooling, and the legacy `CHARSET NONE` toolkit are
+> implemented and verified by 200 tests against real FB 3/4/5 servers.
+> See `plans/000-roadmap.md` for what's next.
 
 ```ts
 import { connect } from '@fast-firebird/core';
@@ -119,6 +121,46 @@ Blobs dominate because legacy drivers use 1KB segments (~1000 round trips per
 MB); fast-firebird uses 64KB segments by default. The one case where
 fast-firebird is slower — bare connect — is because it encrypts the wire by
 default (SRP256 + `op_crypt`); pass `wireCrypt: 'disabled'` to match.
+
+## Streaming large result sets
+
+`queryStream` yields rows lazily in adaptively-sized batches — the next
+`op_fetch` only fires as you consume, so a huge table never lands in memory at
+once and an early `break` stops after just a batch or two:
+
+```ts
+for await (const row of db.queryStream('select * from big_table order by id')) {
+  process(row);            // backpressure-friendly; break any time
+}
+
+// Node stream ergonomics:
+import { Readable } from 'node:stream';
+const stream = Readable.from(db.queryStream('select * from big_table'));
+```
+
+`db.queryStream` runs in its own transaction (committed at end, rolled back on
+error/break); `tx.queryStream` streams within a transaction you own. Don't run
+other statements on the *same* connection mid-stream — use another connection
+or the pool for concurrency.
+
+## Connection pooling
+
+```ts
+import { createPool } from '@fast-firebird/core';
+
+const pool = await createPool({ host, database, user, password, min: 2, max: 10 });
+
+const rows = await pool.query('select * from users where id = ?', [1]); // acquire→run→release
+await pool.transaction(async (tx) => { /* … */ });
+await pool.use(async (conn) => { /* borrow explicitly */ });
+
+await pool.close();
+```
+
+Each pooled connection is a full `Attachment` with its own statement cache, so
+warm statements survive across acquire/release. The pool enforces `max`
+concurrency, validates connections with `op_ping` on borrow, evicts idle
+connections down to `min`, and times out `acquire` when saturated.
 
 ## Wire encryption & compression
 

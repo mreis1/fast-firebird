@@ -3,7 +3,7 @@ import { WireConnection } from '../protocol/wire.js';
 import { performHandshake, type HandshakeResult } from '../protocol/handshake.js';
 import { attachDatabase, createDatabase, detachDatabase, dropDatabase } from '../protocol/attach.js';
 import { startTransaction, type TransactionOptions } from '../protocol/transaction.js';
-import { prepareInfo, runStatement, type QueryResult, type Row, type SessionContext } from './session.js';
+import { prepareInfo, runStatement, streamRows, type QueryResult, type Row, type SessionContext } from './session.js';
 import { StatementCache } from './statement-cache.js';
 import { PreparedStatement } from './prepared.js';
 import { Transaction } from './transaction.js';
@@ -174,6 +174,35 @@ export class Attachment {
   /** Run a single statement in its own transaction; returns affected count. */
   async execute(sql: string, params: ParamValue[] = []): Promise<number> {
     return (await this.run(sql, params)).rowsAffected;
+  }
+
+  /**
+   * Stream rows lazily in its own transaction (committed when iteration ends,
+   * rolled back on error or early break). Rows arrive in adaptively-sized
+   * batches; the next fetch only fires as you consume — backpressure-friendly
+   * for large result sets. Do not run other statements on THIS connection
+   * while iterating; use a separate connection (or the pool) for concurrency.
+   *
+   * ```ts
+   * for await (const row of db.queryStream('select * from big_table')) { … }
+   * ```
+   */
+  async *queryStream(sql: string, params: ParamValue[] = []): AsyncGenerator<Row> {
+    const tx = await this.startTransaction();
+    let ok = false;
+    try {
+      yield* streamRows(this.session, tx.handle, sql, params, (fn) => this.withLock(fn));
+      ok = true;
+    } finally {
+      if (!tx.isFinished) {
+        try {
+          if (ok) await tx.commit();
+          else await tx.rollback();
+        } catch {
+          /* surface the original outcome */
+        }
+      }
+    }
   }
 
   /** True while the connection is usable (socket open, not detached). */

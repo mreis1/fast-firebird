@@ -31,8 +31,10 @@ describe.each(FB_SERVERS)('connect to Firebird $version', ({ port, version }) =>
   });
 
   it('rejects a wrong password with plain Srp too', async () => {
+    // Depending on server config a bad Srp login is answered with an auth
+    // error OR an outright connection drop — both are valid rejections.
     await expect(connect({ ...FB_BASE, port, password: 'nope', authPlugin: 'Srp' })).rejects.toThrow(
-      /user name|password|login/i,
+      /user name|password|login|closed/i,
     );
   });
 

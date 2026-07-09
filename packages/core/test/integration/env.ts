@@ -18,3 +18,26 @@ export const FB_BASE = {
   user: 'SYSDBA',
   password: 'masterkey',
 };
+
+/**
+ * The integration suite runs many files against three SHARED databases.
+ * Firebird serializes DDL on its system tables, so concurrent `recreate
+ * table` (or DDL racing a DML transaction) can raise a transient
+ * "deadlock / object in use" error. Real applications retry these; so does
+ * setup here. Only retries genuinely transient conflicts.
+ */
+export async function withRetry<T>(fn: () => Promise<T>, attempts = 8): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const msg = String((err as Error)?.message ?? '');
+      const transient = /deadlock|conflicts with concurrent|object .*in use|lock conflict|update conflict/i.test(msg);
+      if (!transient) throw err;
+      await new Promise((r) => setTimeout(r, 50 + i * 100));
+    }
+  }
+  throw lastErr;
+}

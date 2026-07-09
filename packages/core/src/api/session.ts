@@ -100,31 +100,8 @@ export async function executePrepared(
   closeCursorAfter: boolean,
 ): Promise<QueryResult> {
   const { wire, opts } = ctx;
-  const inputs = info.description.inputs;
   const outputs = info.description.outputs;
-  if (params.length !== inputs.length) {
-    throw new FirebirdError(`Statement expects ${inputs.length} parameter(s), got ${params.length}`);
-  }
-
-  // Upload blob params first (described type BLOB + string/Buffer value).
-  const prepared: ParamValue[] = new Array(params.length);
-  const paramCodecs = new Map<number, TextCodec>();
-  for (let i = 0; i < params.length; i++) {
-    const v = params[i];
-    const d = inputs[i]!;
-    if (v != null && d.type === SqlType.BLOB && (typeof v === 'string' || Buffer.isBuffer(v))) {
-      const bytes = typeof v === 'string' ? codecForDesc(d, opts, 'blob').encode(v) : v;
-      const id = await writeBlob(wire, txHandle, bytes, opts.blobWriteChunkSize);
-      prepared[i] = new BlobRef(id, d.subType);
-    } else {
-      prepared[i] = v;
-      if (typeof v === 'string') paramCodecs.set(i, codecForDesc(d, opts, 'text'));
-    }
-  }
-  const encodeText = (i: number, value: string): Buffer => {
-    const codec = paramCodecs.get(i);
-    return codec ? codec.encode(value) : Buffer.from(value, 'utf8');
-  };
+  const { prepared, encodeText } = await prepareParams(ctx, txHandle, info, params);
 
   const stmtType = info.description.stmtType;
   const isSelect = isSelectType(stmtType);
@@ -158,15 +135,7 @@ export async function executePrepared(
   }
 
   // 3. Only now is it safe to issue new requests: materialize blob cells.
-  for (const row of rows) {
-    for (let i = 0; i < row.length; i++) {
-      const cell = row[i];
-      if (cell instanceof BlobRef) {
-        const data = await readBlob(wire, txHandle, cell.id, opts.blobReadChunkSize);
-        row[i] = cell.subType === 1 ? codecForDesc(outputs[i]!, opts, 'blob').decode(data) : data;
-      }
-    }
-  }
+  for (const row of rows) await materializeBlobs(ctx, txHandle, row, outputs);
 
   // 4. Close the cursor (deferred — rides with the next packet) so the
   //    statement handle can be re-executed later.
@@ -175,6 +144,55 @@ export async function executePrepared(
   }
 
   return { rows: shapeRows(rows, outputs, opts.lowercaseKeys), rowsAffected };
+}
+
+/** Validate arity, upload blob params, and build the text encoder. */
+async function prepareParams(
+  ctx: SessionContext,
+  txHandle: number,
+  info: PreparedStatementInfo,
+  params: ParamValue[],
+): Promise<{ prepared: ParamValue[]; encodeText: (i: number, v: string) => Buffer }> {
+  const { wire, opts } = ctx;
+  const inputs = info.description.inputs;
+  if (params.length !== inputs.length) {
+    throw new FirebirdError(`Statement expects ${inputs.length} parameter(s), got ${params.length}`);
+  }
+  const prepared: ParamValue[] = new Array(params.length);
+  const paramCodecs = new Map<number, TextCodec>();
+  for (let i = 0; i < params.length; i++) {
+    const v = params[i];
+    const d = inputs[i]!;
+    if (v != null && d.type === SqlType.BLOB && (typeof v === 'string' || Buffer.isBuffer(v))) {
+      const bytes = typeof v === 'string' ? codecForDesc(d, opts, 'blob').encode(v) : v;
+      const id = await writeBlob(wire, txHandle, bytes, opts.blobWriteChunkSize);
+      prepared[i] = new BlobRef(id, d.subType);
+    } else {
+      prepared[i] = v;
+      if (typeof v === 'string') paramCodecs.set(i, codecForDesc(d, opts, 'text'));
+    }
+  }
+  const encodeText = (i: number, value: string): Buffer => {
+    const codec = paramCodecs.get(i);
+    return codec ? codec.encode(value) : Buffer.from(value, 'utf8');
+  };
+  return { prepared, encodeText };
+}
+
+/** Replace BlobRef cells in a row with their materialized value (in place). */
+async function materializeBlobs(
+  ctx: SessionContext,
+  txHandle: number,
+  row: unknown[],
+  outputs: SqlVarDesc[],
+): Promise<void> {
+  for (let i = 0; i < row.length; i++) {
+    const cell = row[i];
+    if (cell instanceof BlobRef) {
+      const data = await readBlob(ctx.wire, txHandle, cell.id, ctx.opts.blobReadChunkSize);
+      row[i] = cell.subType === 1 ? codecForDesc(outputs[i]!, ctx.opts, 'blob').decode(data) : data;
+    }
+  }
 }
 
 /**
@@ -237,15 +255,95 @@ function finishStatement(ctx: SessionContext, sql: string, info: PreparedStateme
   }
 }
 
-function shapeRows(rows: unknown[][], descs: SqlVarDesc[], lowercaseKeys: boolean): Row[] {
+/** Build a fast per-row shaper (column array → keyed object). */
+function rowShaper(descs: SqlVarDesc[], lowercaseKeys: boolean): (r: unknown[]) => Row {
   const keys = descs.map((d, i) => {
-    let k = d.alias || d.field || `F${i + 1}`;
-    if (lowercaseKeys) k = k.toLowerCase();
-    return k;
+    const k = d.alias || d.field || `F${i + 1}`;
+    return lowercaseKeys ? k.toLowerCase() : k;
   });
-  return rows.map((r) => {
+  return (r) => {
     const obj: Row = {};
     for (let i = 0; i < keys.length; i++) obj[keys[i]!] = r[i];
     return obj;
-  });
+  };
+}
+
+function shapeRows(rows: unknown[][], descs: SqlVarDesc[], lowercaseKeys: boolean): Row[] {
+  const shape = rowShaper(descs, lowercaseKeys);
+  return rows.map(shape);
+}
+
+/** A network-op serializer (Attachment.withLock). */
+export type OpLock = <T>(fn: () => Promise<T>) => Promise<T>;
+
+/**
+ * Stream rows lazily: each batch is fetched (and its blobs materialized)
+ * under `lock`, then yielded row by row. The NEXT op_fetch only fires when
+ * the consumer drains the current batch — natural backpressure at batch
+ * granularity. The statement/cursor is closed and cached (or dropped) when
+ * iteration ends, breaks early, or throws.
+ */
+export async function* streamRows(
+  ctx: SessionContext,
+  txHandle: number,
+  sql: string,
+  params: ParamValue[],
+  lock: OpLock,
+): AsyncGenerator<Row> {
+  const cached = ctx.cache?.get(sql);
+  let info: PreparedStatementInfo | null = cached ?? null;
+  let cursorOpen = false;
+  let failed = false;
+  try {
+    const first = await lock(async () => {
+      if (!info) info = await prepareInfo(ctx, txHandle, sql);
+      const { prepared, encodeText } = await prepareParams(ctx, txHandle, info, params);
+      const isSelect = isSelectType(info.description.stmtType);
+      const fc = isSelect ? nextFetchCount(info.rowWidth, ctx.opts.fetchSize, 0) : 0;
+      const exec = await executeStatement(ctx.wire, info, txHandle, prepared, encodeText, {
+        fetchSize: isSelect ? fc : undefined,
+        recordCounts: false,
+      });
+      let batch;
+      if (exec.pendingFetch) {
+        cursorOpen = true;
+        batch = await readFetchBatch(ctx.wire, info);
+      } else {
+        batch = { rows: exec.procRow ? [exec.procRow] : [], eof: true };
+      }
+      for (const r of batch.rows) await materializeBlobs(ctx, txHandle, r, info.description.outputs);
+      return { batch, fc };
+    });
+
+    const outputs = info!.description.outputs;
+    const shape = rowShaper(outputs, ctx.opts.lowercaseKeys);
+    for (const r of first.batch.rows) yield shape(r);
+
+    let eof = first.batch.eof;
+    let fc = first.fc;
+    while (!eof) {
+      const b = await lock(async () => {
+        fc = nextFetchCount(info!.rowWidth, ctx.opts.fetchSize, fc);
+        const batch = await fetchRows(ctx.wire, info!, fc);
+        for (const r of batch.rows) await materializeBlobs(ctx, txHandle, r, outputs);
+        return batch;
+      });
+      for (const r of b.rows) yield shape(r);
+      eof = b.eof;
+    }
+  } catch (err) {
+    failed = true;
+    throw err;
+  } finally {
+    await lock(async () => {
+      if (!info) return;
+      if (cursorOpen) freeStatement(ctx.wire, info.handle, FreeStatement.DSQL_close);
+      if (failed) {
+        ctx.cache?.remove(sql);
+        if (!cached) freeStatement(ctx.wire, info.handle, FreeStatement.DSQL_drop);
+      } else {
+        finishStatement(ctx, sql, info);
+      }
+    });
+  }
 }

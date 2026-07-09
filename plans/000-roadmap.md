@@ -70,13 +70,22 @@ only when API surface stabilizes (avoid premature package fragmentation).
       proof (not an error) — track attempted plugins, one proof each, fail fast
       (was: 30s deadlock). Regression tests added.
 - [x] Blob default chunk raised to 64KB (wire max) — blob throughput is RT-bound
-- [ ] ChaCha wire crypt (FB4+)
-- [ ] Adaptive fetch sizing; connection pool; streaming API
+- [x] ChaCha / ChaCha64 wire crypt (FB4+): SHA256(sessionKey) key, IV pre-shared
+      in the auth op_response TAG_PLUGIN_SPECIFIC clumplet (protocol 16);
+      `wireCryptPlugin` opt-in, Arc4 default; FB3 rejects with a clear error.
+      RFC-8439-vector unit test + FB4/5 integration.
+- [x] Adaptive fetch sizing: batch count from row width vs 256KB budget, ramped
+      40→cap; caps wide-row memory, minimizes RTs on narrow scans.
 
-### M4 — Blobs, streaming, pooling
-- [ ] Segmented blob read/write; streaming APIs with backpressure
-- [ ] Row streaming (async iterators + Readable)
-- [ ] Connection pool
+### M4 — Streaming & pooling ✅ (2026-07-09)
+- [x] Row streaming (`queryStream`, async iterators + `Readable.from`): lazy
+      batch fetch, backpressure, early-break stops after 1–2 batches (asserted),
+      blob materialization, own-tx or in-tx variants.
+- [x] Connection pool (`createPool`/`Pool`): acquire/release/use, min/max,
+      acquire timeout, idle eviction, op_ping validation, per-conn statement
+      cache. Fixed a capacity-overshoot race (reserve slot before async validate).
+- [x] Segmented blob read/write with configurable chunk sizes (done in M2)
+- [ ] Blob *streaming* APIs (chunk-level Readable/Writable) — still buffered per value
 
 ### M5 — Events, services, scripts
 - [ ] POST_EVENT listening (aux connection)

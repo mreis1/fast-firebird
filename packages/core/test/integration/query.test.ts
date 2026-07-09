@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { connect, type Attachment } from '../../src/index.js';
-import { FB_BASE, FB_SERVERS } from './env.js';
+import { FB_BASE, FB_SERVERS, withRetry } from './env.js';
 
 describe.each(FB_SERVERS)('queries on Firebird $version', ({ port, version }) => {
   let db: Attachment;
@@ -8,7 +8,8 @@ describe.each(FB_SERVERS)('queries on Firebird $version', ({ port, version }) =>
 
   beforeAll(async () => {
     db = await connect({ ...FB_BASE, port });
-    await db.execute(`recreate table ${table} (
+    await withRetry(() =>
+      db.execute(`recreate table ${table} (
       id integer not null primary key,
       name varchar(60),
       fixed char(10),
@@ -21,7 +22,8 @@ describe.each(FB_SERVERS)('queries on Firebird $version', ({ port, version }) =>
       created timestamp,
       notes blob sub_type text,
       payload blob
-    )`);
+    )`),
+    );
   });
 
   afterAll(async () => {
@@ -121,8 +123,10 @@ describe.each(FB_SERVERS)('queries on Firebird $version', ({ port, version }) =>
   });
 
   it('executes stored procedures via execute procedure (op_execute2)', async () => {
-    await db.execute(`recreate procedure sp_double_${version} (x integer) returns (y integer) as
-      begin y = x * 2; end`);
+    await withRetry(() =>
+      db.execute(`recreate procedure sp_double_${version} (x integer) returns (y integer) as
+      begin y = x * 2; end`),
+    );
     const rows = await db.query(`execute procedure sp_double_${version}(21)`);
     expect(rows).toEqual([{ Y: 42 }]);
   });
