@@ -4,6 +4,7 @@ import type { WireConnection } from './wire.js';
 import type { XdrWriter } from './xdr.js';
 import type { TextCodec } from '../charset/decoder.js';
 import { decodeDate, decodeTimeMs, decodeTimestamp, encodeTimestamp, encodeDateOnly, timeMsToFractions } from '../types/datetime.js';
+import { decodeDecFloat } from '../types/decfloat.js';
 import { FirebirdError } from '../api/errors.js';
 
 /** Marker for a blob id decoded from a row; materialized after the fetch. */
@@ -120,10 +121,10 @@ export function makeColumnReader(desc: SqlVarDesc, textCodec: TextCodec | null, 
       return async (w) => new BlobRef(Buffer.from(await w.transport.read(8)), subType);
     }
     case SqlType.DEC16:
-      // TODO(M2+): IEEE 754-2008 decimal64 decoding; raw bytes for now.
-      return async (w) => Buffer.from(await w.transport.read(8));
+      // IEEE 754-2008 decimal64/128 (DPD) → exact decimal string.
+      return async (w) => decodeDecFloat(Buffer.from(await w.transport.read(8)));
     case SqlType.DEC34:
-      return async (w) => Buffer.from(await w.transport.read(16));
+      return async (w) => decodeDecFloat(Buffer.from(await w.transport.read(16)));
     case SqlType.NULL:
       return async () => null;
     default:
