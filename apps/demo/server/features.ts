@@ -70,9 +70,14 @@ from rdb$database`,
     id: 'tztz',
     since: 4,
     title: 'TIME/TIMESTAMP WITH TIME ZONE',
-    blurb: 'Zone-aware temporals with named zones and AT TIME ZONE conversion.',
-    sql: `select cast('2024-06-15 09:30:00 America/New_York' as timestamp with time zone) as ny,
-       cast('2024-06-15 09:30:00 America/New_York' as timestamp with time zone) at time zone 'UTC' as in_utc
+    blurb:
+      'Zone-aware temporals with named zones and AT TIME ZONE conversion — one instant, many local faces. ' +
+      'The driver returns zoned values as JS Dates (a pure UTC instant, zone metadata dropped); ' +
+      'the text columns are rendered server-side to show the zone arithmetic.',
+    sql: `select cast(cast('2024-06-15 09:30:00 America/New_York' as timestamp with time zone) as varchar(50)) as in_new_york,
+       cast(cast('2024-06-15 09:30:00 America/New_York' as timestamp with time zone) at time zone 'UTC' as varchar(50)) as in_utc,
+       cast(cast('2024-06-15 09:30:00 America/New_York' as timestamp with time zone) at time zone 'Europe/Paris' as varchar(50)) as in_paris,
+       cast('2024-06-15 09:30:00 America/New_York' as timestamp with time zone) as as_js_date
 from rdb$database`,
   },
   {
