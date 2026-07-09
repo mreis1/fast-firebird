@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import iconv from 'iconv-lite';
 import { connect, createDatabase, type Attachment } from '../../src/index.js';
-import { FB_BASE, FB_SERVERS } from './env.js';
+import { FB_BASE, FB_SERVERS, HOOK_TIMEOUT } from './env.js';
 
 /**
  * The legacy-Delphi scenario this driver exists for: databases declared
@@ -20,7 +20,7 @@ describe.each(FB_SERVERS)('CHARSET NONE legacy win1252 on Firebird $version', ({
       long_memo blob sub_type text
     )`);
     await db.disconnect();
-  });
+  }, HOOK_TIMEOUT);
 
   afterAll(async () => {
     const db = await connect({ ...FB_BASE, port, database: dbPath, charset: 'NONE' });

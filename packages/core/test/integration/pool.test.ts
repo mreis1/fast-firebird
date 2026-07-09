@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createPool, type Pool } from '../../src/index.js';
-import { FB_BASE, FB_SERVERS, withRetry } from './env.js';
+import { FB_BASE, FB_SERVERS, withRetry, HOOK_TIMEOUT } from './env.js';
 
 const fb5 = FB_SERVERS.find((s) => s.version === 5)!;
 
@@ -9,7 +9,7 @@ describe('connection pool (Firebird 5)', () => {
   beforeAll(async () => {
     pool = await createPool({ ...FB_BASE, port: fb5.port, min: 1, max: 3, idleTimeoutMs: 500 });
     await withRetry(() => pool.use((c) => c.execute('recreate table t_pool (id integer primary key, v varchar(20))')));
-  });
+  }, HOOK_TIMEOUT);
   afterAll(async () => {
     await pool.close();
   });

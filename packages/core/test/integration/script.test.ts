@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { connect, type Attachment } from '../../src/index.js';
-import { FB_BASE, FB_SERVERS, withRetry } from './env.js';
+import { FB_BASE, FB_SERVERS, withRetry, HOOK_TIMEOUT } from './env.js';
 
 describe.each(FB_SERVERS)('executeScript on Firebird $version', ({ port, version }) => {
   let db: Attachment;
@@ -9,8 +9,11 @@ describe.each(FB_SERVERS)('executeScript on Firebird $version', ({ port, version
 
   beforeAll(async () => {
     db = await connect({ ...FB_BASE, port });
+    // A prior run leaves sp_fill_* depending on the log table; drop it first
+    // so the table can be recreated.
+    await db.execute(`drop procedure ${proc}`).catch(() => undefined);
     await withRetry(() => db.execute(`recreate table ${log} (id integer, note varchar(50))`));
-  });
+  }, HOOK_TIMEOUT);
   afterAll(async () => {
     await db?.disconnect();
   });

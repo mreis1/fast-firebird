@@ -8,6 +8,7 @@ export {
   type ScriptExecutionResult,
   type StatementResult,
 } from './script/execute.js';
+export { EventListener, EventChannel } from './events/events.js';
 export type { QueryResult, Row } from './api/session.js';
 export type { TransactionOptions, IsolationLevel } from './protocol/transaction.js';
 export type { ParamValue } from './protocol/msgcodec.js';

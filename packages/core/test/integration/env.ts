@@ -20,6 +20,14 @@ export const FB_BASE = {
 };
 
 /**
+ * Explicit hook timeout for setup that connects. Firebird 3's single-threaded
+ * async-event-port cleanup can briefly slow new connects right after the event
+ * tests, and vitest's global `hookTimeout` config isn't honored for hooks in
+ * every runner mode — so setup hooks pass this explicitly.
+ */
+export const HOOK_TIMEOUT = 60_000;
+
+/**
  * The integration suite runs many files against three SHARED databases.
  * Firebird serializes DDL on its system tables, so concurrent `recreate
  * table` (or DDL racing a DML transaction) can raise a transient

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { connect, type Attachment } from '../../src/index.js';
-import { FB_BASE, FB_SERVERS, withRetry } from './env.js';
+import { FB_BASE, FB_SERVERS, withRetry, HOOK_TIMEOUT } from './env.js';
 
 describe.each(FB_SERVERS)('statement cache & round trips on Firebird $version', ({ port, version }) => {
   let db: Attachment;
@@ -11,7 +11,7 @@ describe.each(FB_SERVERS)('statement cache & round trips on Firebird $version', 
     await withRetry(() => db.execute(`recreate table ${table} (id integer not null primary key, name varchar(40))`));
     await db.execute(`insert into ${table} values (1, 'one')`);
     await db.execute(`insert into ${table} values (2, 'two')`);
-  });
+  }, HOOK_TIMEOUT);
 
   afterAll(async () => {
     await db?.disconnect();

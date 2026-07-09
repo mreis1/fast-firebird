@@ -222,4 +222,30 @@ export class Transport {
     this.inflater?.destroy();
     this.socket.destroy();
   }
+
+  /**
+   * Close with a graceful FIN (not RST) and wait for the peer to close, with
+   * a fallback destroy. Firebird 3's async-event port cleanup is corrupted by
+   * an abrupt RST — the event socket MUST be shut down this way.
+   */
+  endGracefully(timeoutMs = 400): Promise<void> {
+    this.closed = true;
+    this.deflater?.destroy();
+    this.inflater?.destroy();
+    return new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.socket.destroy();
+        resolve();
+      };
+      const timer = setTimeout(finish, timeoutMs);
+      timer.unref?.();
+      this.socket.once('close', finish);
+      this.socket.once('error', finish);
+      this.socket.end();
+    });
+  }
 }

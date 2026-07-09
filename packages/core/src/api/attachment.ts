@@ -10,6 +10,7 @@ import { Transaction } from './transaction.js';
 import { resolveOptions, type FirebirdConnectionOptions, type LegacyOptionAliases, type ResolvedOptions } from './options.js';
 import { Op } from '../protocol/constants.js';
 import { executeScript, type ExecuteScriptOptions, type ScriptExecutionResult } from '../script/execute.js';
+import { EventChannel, type EventListener } from '../events/events.js';
 import type { ParamValue } from '../protocol/msgcodec.js';
 
 export type ConnectInput = FirebirdConnectionOptions & LegacyOptionAliases;
@@ -17,6 +18,7 @@ export type ConnectInput = FirebirdConnectionOptions & LegacyOptionAliases;
 /** An open database attachment. Obtain via `connect()` or `createDatabase()`. */
 export class Attachment {
   private detached = false;
+  private eventChannel: EventChannel | null = null;
   /** Serializes wire operations — one logical op at a time per connection. */
   private opChain: Promise<unknown> = Promise.resolve();
   /** @internal */
@@ -197,6 +199,30 @@ export class Attachment {
     return executeScript(this, script, options);
   }
 
+  /**
+   * Subscribe to Firebird `POST_EVENT` notifications. Returns a started
+   * `EventListener` (an EventEmitter): `.on(name, count => …)` per event,
+   * `.on('post', (name, count) => …)` for any, `.on('error', …)`. Call
+   * `.close()` when done. Uses a separate async channel, so it does not block
+   * queries on this connection.
+   *
+   * ```ts
+   * const ev = await db.events(['order_placed']);
+   * ev.on('order_placed', (count) => refresh());
+   * ```
+   */
+  async events(names: string[]): Promise<EventListener> {
+    if (this.detached) throw new Error('Attachment already closed');
+    if (names.length === 0) throw new Error('events() requires at least one event name');
+    this.eventChannel ??= new EventChannel(this, this.options.host);
+    return this.eventChannel.subscribe(names);
+  }
+
+  /** @internal Called by the channel when its last subscription closes. */
+  detachEventChannel(): void {
+    this.eventChannel = null;
+  }
+
   async *queryStream(sql: string, params: ParamValue[] = []): AsyncGenerator<Row> {
     const tx = await this.startTransaction();
     let ok = false;
@@ -232,6 +258,8 @@ export class Attachment {
   async disconnect(): Promise<void> {
     if (this.detached) return;
     this.detached = true;
+    this.eventChannel?.closeAll();
+    this.eventChannel = null;
     try {
       await detachDatabase(this.wire);
     } catch {

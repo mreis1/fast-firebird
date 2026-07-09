@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { connect, type Attachment } from '../../src/index.js';
-import { FB_BASE, FB_SERVERS } from './env.js';
+import { FB_BASE, FB_SERVERS, HOOK_TIMEOUT } from './env.js';
 
 describe.each(FB_SERVERS)('adaptive fetch on Firebird $version', ({ port }) => {
   let db: Attachment;
   beforeAll(async () => {
     db = await connect({ ...FB_BASE, port });
-  });
+  }, HOOK_TIMEOUT);
   afterAll(async () => {
     await db?.disconnect();
   });

@@ -32,8 +32,14 @@ services:
     <<: *fb-common
     image: firebirdsql/firebird:3
     container_name: fast-firebird-test-fb3
+    environment:
+      <<: *fb-env
+      # Fixed async-event port, published 1:1 so the event aux channel is
+      # reachable from the host (otherwise it picks an unmapped random port).
+      FIREBIRD_CONF_RemoteAuxPort: "3053"
     ports:
       - "127.0.0.1:30503:3050"
+      - "127.0.0.1:3053:3053"
     volumes:
       - fast-firebird-test-fb3-data:/var/lib/firebird/data
 
@@ -43,10 +49,12 @@ services:
     container_name: fast-firebird-test-fb4
     ports:
       - "127.0.0.1:30504:3050"
+      - "127.0.0.1:3054:3054"
     environment:
       <<: *fb-env
       # FB4+ supports ChaCha; offer all so the driver can negotiate the best.
       FIREBIRD_CONF_WireCryptPlugin: ChaCha20, ChaCha, ChaCha64, Arc4
+      FIREBIRD_CONF_RemoteAuxPort: "3054"
     volumes:
       - fast-firebird-test-fb4-data:/var/lib/firebird/data
 
@@ -56,9 +64,11 @@ services:
     container_name: fast-firebird-test-fb5
     ports:
       - "127.0.0.1:30505:3050"
+      - "127.0.0.1:3055:3055"
     environment:
       <<: *fb-env
       FIREBIRD_CONF_WireCryptPlugin: ChaCha20, ChaCha, ChaCha64, Arc4
+      FIREBIRD_CONF_RemoteAuxPort: "3055"
     volumes:
       - fast-firebird-test-fb5-data:/var/lib/firebird/data
 
