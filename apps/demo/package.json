@@ -1,0 +1,35 @@
+{
+  "name": "@fast-firebird/demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Live dashboard showcasing @fast-firebird/core, @fast-firebird/drizzle and the node-firebird2-ext compat backend against Firebird 3/4/5.",
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,magenta \"pnpm dev:server\" \"pnpm dev:web\"",
+    "dev:server": "tsx watch server/index.ts",
+    "dev:web": "vite",
+    "build": "vite build",
+    "start": "cross-env DEMO_SERVE_WEB=1 tsx server/index.ts"
+  },
+  "dependencies": {
+    "@fast-firebird/core": "workspace:*",
+    "@fast-firebird/drizzle": "workspace:*",
+    "node-firebird-2-ext": "file:../../references/node-firebird2-ext",
+    "drizzle-orm": "^0.45.0",
+    "fastify": "^5.2.0",
+    "@fastify/static": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  }
+}

@@ -1,0 +1,185 @@
+import Fastify from 'fastify';
+import { connect, connectService } from '@fast-firebird/core';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { addServer, closeAll, getServer, listServerConfigs, type ServerConfig } from './servers.ts';
+import { benchmark, runQuery, serializeCell, type Engine } from './engines.ts';
+
+const PORT = Number(process.env.DEMO_API_PORT || 5178);
+const app = Fastify({ logger: false });
+
+/** Strip secrets before sending a server config to the browser. */
+function publicConfig(c: ServerConfig) {
+  return { id: c.id, label: c.label, host: c.host, port: c.port, database: c.database, user: c.user, version: c.version };
+}
+
+/** Minimal SSE helper over the raw Node response. Returns send/close. */
+function sse(reply: any) {
+  const res = reply.raw;
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+  });
+  res.write('\n');
+  return {
+    send: (data: unknown) => res.write(`data: ${JSON.stringify(data)}\n\n`),
+    close: () => res.end(),
+  };
+}
+
+app.get('/api/servers', async () => ({ servers: listServerConfigs().map(publicConfig) }));
+
+app.post('/api/servers', async (req) => {
+  const cfg = addServer(req.body as any);
+  return { server: publicConfig(cfg) };
+});
+
+app.get('/api/servers/:id/info', async (req) => {
+  const { id } = req.params as { id: string };
+  const state = await getServer(id);
+  const wire = await state.pool.use(async (att) => {
+    const [engine] = await att.query(`select rdb$get_context('SYSTEM','ENGINE_VERSION') as V from rdb$database`);
+    return {
+      protocolVersion: att.protocolVersion,
+      wireEncrypted: att.wireEncrypted,
+      wireCryptPlugin: att.wireCryptPlugin,
+      wireCompressed: att.wireCompressed,
+      engineVersion: (engine as any)?.V ?? null,
+    };
+  });
+  let serverVersion: string | null = null;
+  try {
+    const svc = await connectService({ host: state.config.host, port: state.config.port, user: state.config.user, password: state.config.password });
+    serverVersion = (await svc.getServerInfo()).serverVersion;
+    await svc.disconnect();
+  } catch {
+    /* services optional */
+  }
+  return { config: publicConfig(state.config), ...wire, serverVersion, pool: state.pool.stats() };
+});
+
+app.post('/api/servers/:id/query', async (req) => {
+  const { id } = req.params as { id: string };
+  const { sql, params, engine } = req.body as { sql: string; params?: unknown[]; engine: Engine };
+  const state = await getServer(id);
+  return runQuery(state, engine, sql, params ?? []);
+});
+
+app.post('/api/servers/:id/benchmark', async (req) => {
+  const { id } = req.params as { id: string };
+  const { n } = req.body as { n?: number };
+  const state = await getServer(id);
+  return { n: n ?? 200, lanes: await benchmark(state, Math.min(2000, Math.max(1, n ?? 200))) };
+});
+
+app.post('/api/servers/:id/emit', async (req) => {
+  const { id } = req.params as { id: string };
+  const { name } = req.body as { name: string };
+  const state = await getServer(id);
+  await state.pool.use((att) => att.execute(`execute block as begin post_event '${name.replace(/'/g, "''")}'; end`));
+  return { emitted: name };
+});
+
+app.post('/api/servers/:id/blob', async (req) => {
+  const { id } = req.params as { id: string };
+  const state = await getServer(id);
+  const text = 'Blob text with unicode: café € — persisted and read back.';
+  const binary = Buffer.from([0x00, 0x01, 0x02, 0xfa, 0xfb, 0xfc, 0xff]);
+  const row = await state.pool.use(async (att) => {
+    await att.transaction((tx) => tx.execute('recreate table FF_DEMO_BLOB (ID integer not null primary key, NOTE blob sub_type text, BIN blob sub_type binary)'), { wait: false });
+    await att.execute('insert into FF_DEMO_BLOB (ID, NOTE, BIN) values (?, ?, ?)', [1, text, binary]);
+    const [r] = await att.query('select NOTE, BIN from FF_DEMO_BLOB where ID = 1');
+    return r as any;
+  });
+  return { note: row.NOTE, binary: serializeCell(row.BIN) };
+});
+
+// ── SSE: pool stats ────────────────────────────────────────────────────────
+app.get('/api/servers/:id/pool', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const state = await getServer(id);
+  reply.hijack();
+  const ch = sse(reply);
+  const tick = () => ch.send({ t: Date.now(), ...state.pool.stats() });
+  tick();
+  const timer = setInterval(tick, 1000);
+  req.raw.on('close', () => {
+    clearInterval(timer);
+    ch.close();
+  });
+});
+
+// ── SSE: live POST_EVENT feed ────────────────────────────────────────────────
+app.get('/api/servers/:id/events', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const names = String((req.query as any).names || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const state = await getServer(id);
+  reply.hijack();
+  const ch = sse(reply);
+  const att = await connect({ host: state.config.host, port: state.config.port, database: state.config.database, user: state.config.user, password: state.config.password, encoding: 'NONE', charsetNoneEncoding: 'win1252' });
+  const listener = await att.events(names.length ? names : ['demo_event']);
+  ch.send({ armed: names.length ? names : ['demo_event'] });
+  listener.on('post', (name: string, count: number) => ch.send({ name, count, t: Date.now() }));
+  listener.on('error', (e: Error) => ch.send({ error: e.message }));
+  req.raw.on('close', async () => {
+    try {
+      await listener.close();
+      await att.disconnect();
+    } catch { /* ignore */ }
+    ch.close();
+  });
+});
+
+// ── SSE: streamed rows (lazy, backpressured) ─────────────────────────────────
+app.get('/api/servers/:id/stream', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const count = Math.min(100_000, Math.max(1, Number((req.query as any).count) || 1000));
+  const state = await getServer(id);
+  reply.hijack();
+  const ch = sse(reply);
+  const att = await connect({ host: state.config.host, port: state.config.port, database: state.config.database, user: state.config.user, password: state.config.password, encoding: 'NONE', charsetNoneEncoding: 'win1252' });
+  let closed = false;
+  req.raw.on('close', () => { closed = true; });
+  try {
+    const t0 = performance.now();
+    let seen = 0;
+    const gen = att.queryStream(`with recursive g as (select 1 as n from rdb$database union all select n + 1 from g where n < ${count}) select n from g`);
+    for await (const row of gen) {
+      if (closed) break;
+      seen++;
+      if (seen % 250 === 0 || seen === count) ch.send({ seen, total: count, ms: +(performance.now() - t0).toFixed(0), sample: serializeCell((row as any).N) });
+    }
+    if (!closed) ch.send({ done: true, seen, ms: +(performance.now() - t0).toFixed(0) });
+  } catch (e) {
+    if (!closed) ch.send({ error: (e as Error).message });
+  } finally {
+    await att.disconnect().catch(() => void 0);
+    ch.close();
+  }
+});
+
+// Serve the built React app in production (pnpm start).
+if (process.env.DEMO_SERVE_WEB) {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const webRoot = join(here, '..', 'dist-web');
+  if (existsSync(webRoot)) {
+    const staticPlugin = (await import('@fastify/static')).default;
+    await app.register(staticPlugin, { root: webRoot });
+    app.setNotFoundHandler((_req, reply) => reply.sendFile('index.html'));
+  }
+}
+
+const shutdown = async () => {
+  await closeAll();
+  await app.close();
+  process.exit(0);
+};
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
+
+app.listen({ port: PORT, host: '0.0.0.0' }).then(() => {
+  console.log(`[demo] API on http://localhost:${PORT}  (web dev: http://localhost:5177)`);
+});

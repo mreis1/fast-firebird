@@ -136,8 +136,10 @@ only when API surface stabilizes (avoid premature package fragmentation).
 - Regression: `CHARSET NONE` + win1252 round-trips (€, smart quotes, em dash).
 
 ## Current status (2026-07-09)
-M0–M5.5 complete; M6 Drizzle adapter done (`@fast-firebird/drizzle`, 30 tests on
-FB3/4/5). Core: 318 tests green. A core param-coercion/wire-desync bug (string
-param → NUMERIC column) was surfaced by the Drizzle work and fixed. Remaining M6:
-node-firebird compat layer + migration guide, CI, benchmark expansion. See
-`diary/2026-07-09.md` (session 9).
+M0–M5.5 complete. M6: Drizzle adapter done (`@fast-firebird/drizzle`, 30 tests on
+FB3/4/5); node-firebird2-ext backed by fast-firebird (branch `fast-firebird`,
+9/9 on FB3/4/5, see `plans/nf2-ext-integration.md`); and a live demo dashboard
+(`apps/demo`, React + Fastify) exercising core/drizzle/compat on one screen. Core:
+318 tests green (+ a param-coercion/wire-desync bug fixed). Remaining: publish
+`@fast-firebird/core`, CI, benchmark expansion. See `diary/2026-07-09.md`
+(sessions 9–11).
