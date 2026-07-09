@@ -41,14 +41,16 @@ only when API surface stabilizes (avoid premature package fragmentation).
 - [x] Transactions (TPB builder, commit/rollback/retaining, isolation presets)
 - [x] allocate+prepare pipelined (1 RT), execute, batched fetch, SQL-info parsing
 - [x] BLR parameter messages (value-driven) + output BLR from describe
-- [x] Type codec: all FB3 types + INT64/INT128, TZ types (zone discarded for now);
-      DECFLOAT decodes to raw bytes (TODO proper decimal)
+- [x] Type codec: all FB3 types + INT64/INT128, TZ types (decoded to UTC-instant
+      JS Dates; zone id discarded — zone-preserving types deferred, see backlog);
+      DECFLOAT: full IEEE 754-2008 DPD decode+encode since 2026-07-09/10
+      (exact decimal strings; target-aware param binding)
 - [x] Charset layer incl. `CHARSET NONE` + `charsetNoneEncoding` + transcodeAdapter
       + charsetOverrides — verified € round-trip on FB3/4/5
 - [x] Blob read/write (eager materialization; subtype 1 → string)
 - [x] High-level API: `connect()`, `query()`, `run()`, `execute()`, `transaction()`
-- [ ] Statement cache / reusable PreparedStatement objects (M3)
-- [ ] op_execute affected-counts piggyback avoidance (extra RT today for DML)
+- [x] Statement cache / reusable PreparedStatement objects (delivered in M3)
+- [x] op_execute affected-counts piggyback (delivered in M3 — 1-RT warm DML)
 
 ### M3 — Security & performance (statement cache + RT work ✅ 2026-07-09)
 - [x] Statement cache: per-connection LRU keyed by SQL (`statementCacheSize`,
@@ -85,7 +87,8 @@ only when API surface stabilizes (avoid premature package fragmentation).
       acquire timeout, idle eviction, op_ping validation, per-conn statement
       cache. Fixed a capacity-overshoot race (reserve slot before async validate).
 - [x] Segmented blob read/write with configurable chunk sizes (done in M2)
-- [ ] Blob *streaming* APIs (chunk-level Readable/Writable) — still buffered per value
+- [x] Blob *read* streaming (`Blob.stream()`, chunk-level Readable — M5.5)
+- [ ] Blob *write* streaming (Writable; writes are still buffered per value) — backlog
 
 ### M5 — Events, services, scripts ✅ (2026-07-09)
 - [x] Script parser (isql-faithful: SET TERM, PSQL bodies, comments, string/
@@ -125,9 +128,47 @@ only when API surface stabilizes (avoid premature package fragmentation).
       column types (timestamp/date/time/blob/blobText). 30 integration tests
       (CRUD, where, pagination, RETURNING, tx commit/rollback, all column types)
       green on FB3/4/5. Surfaced+fixed a core param-coercion/wire-desync bug (below).
-- [ ] node-firebird/node-firebird2 compat layer + migration guide
-- [ ] Benchmarks: localhost + simulated latency (tc/toxiproxy), blob throughput, charset overhead
-- [ ] Docs site / README polish; CI (GitHub Actions with FB 3/4/5 service containers)
+- [x] node-firebird2 compat + migration guide — delivered as the `fast-firebird`
+      branch of `the private node-firebird2-ext repo` (full internals swap, public API
+      unchanged, RO→RW auto-upgrade replicated, MIGRATION.md; 9/9 on FB3/4/5).
+      See `plans/nf2-ext-integration.md`. Prereq for deployment: publish core.
+- [x] Live demo dashboard (`apps/demo`, React + Fastify): connection/wire info,
+      live pool + POST_EVENT (SSE), three-way SQL runner (core/drizzle/compat),
+      version feature explorer (FB3/4/5 cards, runnable SQL), row streaming,
+      blob round-trip, per-stack micro-benchmark, custom structure benchmark
+      (user-defined columns + blob file picker, insert+fetch timings).
+- [ ] Publish `@fast-firebird/core` (npm or private registry) — blocks real
+      deployment of the nf2-ext branch (today a `file:` link)
+- [ ] CI: GitHub Actions with FB 3/4/5 service containers
+- [ ] Benchmarks expansion: tc/toxiproxy latency matrix, blob throughput, charset overhead
+- [ ] Docs site / README polish
+
+## Deferred backlog (explicitly parked, in rough priority order)
+
+1. **`SELECT *` projection rewrite** (`expandStar`, `plans/projection.md`) —
+   rewrite `*`/`ALIAS.*`/`TABLE.*` server-side so `exclude` can skip blob
+   columns without the caller typing every column. User-requested; needs
+   alias-aware SQL analysis.
+2. **Zone-preserving timezone types** — TIMESTAMP/TIME WITH TIME ZONE currently
+   decode to UTC-instant JS `Date`s (instant exact, zone id dropped; verified:
+   09:30 America/New_York → 13:30Z). Apps that must round-trip the *zone*
+   need a `{date, zone}` value or Temporal ZonedDateTime once stable in Node.
+3. **Blob write streaming** — `Writable`/AsyncIterable input for blob params
+   (reads already stream via `Blob.stream()`).
+4. **core `autoUpgradeReadOnly`** — opt-in RO→RW transaction auto-upgrade with
+   statement replay in core's own API (the nf2-ext compat layer already does
+   this at its level).
+5. **Drizzle depth**: nested transactions (savepoints — adapter currently
+   throws), relational query API, drizzle-kit migrations, RDB$ introspection →
+   schema generation.
+6. **Services actions**: backup/restore (gbak) via service start+output —
+   plumbing (SPB, collectOutput) already exists.
+7. **DECFLOAT special values** — Inf/NaN decode; encode rejects them (finite
+   round-trip complete).
+8. **Protocol 10–12 / FB 2.5 legacy support** — EOL upstream; only if a
+   migration demands it.
+9. **Native/WASM acceleration** (SIMD UTF-8, decimal128) — only if benchmarks
+   prove the need (`plans/architecture.md`).
 
 ## Testing strategy
 - Unit: XDR, SRP vectors, type codec, charset, script parser — no server needed.
@@ -135,11 +176,12 @@ only when API surface stabilizes (avoid premature package fragmentation).
   strictly isolated per `plans/docker-safety.md`.
 - Regression: `CHARSET NONE` + win1252 round-trips (€, smart quotes, em dash).
 
-## Current status (2026-07-09)
-M0–M5.5 complete. M6: Drizzle adapter done (`@fast-firebird/drizzle`, 30 tests on
-FB3/4/5); node-firebird2-ext backed by fast-firebird (branch `fast-firebird`,
-9/9 on FB3/4/5, see `plans/nf2-ext-integration.md`); and a live demo dashboard
-(`apps/demo`, React + Fastify) exercising core/drizzle/compat on one screen. Core:
-318 tests green (+ a param-coercion/wire-desync bug fixed). Remaining: publish
-`@fast-firebird/core`, CI, benchmark expansion. See `diary/2026-07-09.md`
-(sessions 9–11).
+## Current status (2026-07-10)
+M0–M5.5 complete. M6 essentially delivered: Drizzle adapter (30 tests),
+node-firebird2-ext swap (branch `fast-firebird`, 9/9), live demo dashboard with
+feature explorer + custom benchmark, brand assets (SVG/PNG/ICO). DECFLOAT now
+fully decoded AND encoded (target-aware params) — the last placeholder type; the
+read+write type system is complete for finite values. Core: 340+ tests green.
+Remaining active M6 work: publish `@fast-firebird/core`, CI, benchmark
+expansion, docs polish. Parked work lives in the Deferred backlog above.
+See `diary/2026-07-09.md` (sessions 9–14) and `diary/2026-07-10.md`.
