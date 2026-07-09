@@ -15,6 +15,18 @@ export class BlobRef {
   ) {}
 }
 
+/**
+ * A parameter pre-encoded as IEEE 754-2008 decimal (DPD). Produced by the
+ * param-prep layer when a string/number is bound to a DECFLOAT column, so the
+ * value goes out as a native dec64/dec128 instead of a lossy double or a text
+ * coercion.
+ */
+export class DecFloatVal {
+  constructor(readonly bytes: Buffer) {
+    if (bytes.length !== 8 && bytes.length !== 16) throw new FirebirdError('DecFloatVal expects 8 or 16 bytes');
+  }
+}
+
 export type ColumnReader = (wire: WireConnection) => Promise<unknown>;
 
 export interface Int64Mode {
@@ -263,7 +275,8 @@ export type ParamValue =
   | boolean
   | Date
   | Buffer
-  | BlobRef;
+  | BlobRef
+  | DecFloatVal;
 
 const INT32_MIN = -2_147_483_648;
 const INT32_MAX = 2_147_483_647;
@@ -349,6 +362,10 @@ export function encodeParams(
       blr.byte(Blr.quad).byte(0);
       const id = v.id;
       values2.push((w) => w.raw(id));
+    } else if (v instanceof DecFloatVal) {
+      blr.byte(v.bytes.length === 8 ? Blr.dec64 : Blr.dec128);
+      const bytes = v.bytes;
+      values2.push((w) => w.raw(bytes));
     } else if (Buffer.isBuffer(v)) {
       if (v.length > 0xffff) throw new FirebirdError('Buffer parameter longer than 65535 bytes; use a BLOB column');
       blr.byte(Blr.text).word(v.length);

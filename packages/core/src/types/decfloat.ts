@@ -91,6 +91,81 @@ export function decodeDecFloat(buf: Buffer): string {
   return format(neg, digits, exponent);
 }
 
+/** Parse a decimal string into sign / coefficient digits / base-10 exponent. */
+function parseDecimal(input: string): { neg: boolean; digits: string; exp: number } {
+  let s = input.trim();
+  let neg = false;
+  if (s[0] === '+') s = s.slice(1);
+  else if (s[0] === '-') {
+    neg = true;
+    s = s.slice(1);
+  }
+  let exp = 0;
+  const e = s.search(/[eE]/);
+  if (e >= 0) {
+    exp = parseInt(s.slice(e + 1), 10);
+    s = s.slice(0, e);
+  }
+  const dot = s.indexOf('.');
+  if (dot >= 0) {
+    exp -= s.length - dot - 1;
+    s = s.slice(0, dot) + s.slice(dot + 1);
+  }
+  if (!/^\d+$/.test(s)) throw new Error(`Invalid decimal literal: ${input}`);
+  s = s.replace(/^0+(?=\d)/, '');
+  return { neg, digits: s, exp };
+}
+
+/**
+ * Encode a decimal string as a Firebird DECFLOAT (8 or 16 bytes, big-endian,
+ * DPD) — the inverse of `decodeDecFloat`. Coefficients longer than the format's
+ * precision are round-half-up to fit.
+ */
+export function encodeDecFloat(value: string, byteWidth: 8 | 16): Buffer {
+  const fmt = byteWidth === 8 ? DEC64 : DEC128;
+  const maxDigits = fmt.declets * 3 + 1;
+  let { neg, digits, exp } = parseDecimal(value);
+
+  if (digits.length > maxDigits) {
+    const dropped = digits.length - maxDigits;
+    let coeff = BigInt(digits.slice(0, maxDigits));
+    if (digits.charCodeAt(maxDigits) - 48 >= 5) coeff += 1n;
+    exp += dropped;
+    digits = coeff.toString();
+    if (digits.length > maxDigits) {
+      digits = digits.slice(0, maxDigits);
+      exp += 1;
+    }
+  }
+  digits = digits.padStart(maxDigits, '0');
+
+  const msd = digits.charCodeAt(0) - 48;
+  const biasedExp = exp + fmt.bias;
+  const expMsb = biasedExp >> Number(fmt.expContBits);
+  const expCont = biasedExp & ((1 << Number(fmt.expContBits)) - 1);
+  if (biasedExp < 0 || expMsb > 0b11) throw new Error(`DECFLOAT exponent out of range for ${value}`);
+
+  const combo = msd <= 7 ? (expMsb << 3) | msd : 0b11000 | (expMsb << 1) | (msd - 8);
+
+  let v = neg ? 1n : 0n;
+  v = (v << 5n) | BigInt(combo);
+  v = (v << fmt.expContBits) | BigInt(expCont);
+  const rest = digits.slice(1);
+  for (let i = 0; i < fmt.declets; i++) {
+    const d2 = rest.charCodeAt(i * 3) - 48;
+    const d1 = rest.charCodeAt(i * 3 + 1) - 48;
+    const d0 = rest.charCodeAt(i * 3 + 2) - 48;
+    v = (v << 10n) | BigInt(encodeDeclet(d2, d1, d0));
+  }
+
+  const buf = Buffer.alloc(byteWidth);
+  for (let i = byteWidth - 1; i >= 0; i--) {
+    buf[i] = Number(v & 0xffn);
+    v >>= 8n;
+  }
+  return buf;
+}
+
 /** Assemble sign + coefficient digits + base-10 exponent into a plain decimal string. */
 function format(neg: boolean, digits: string, exp: number): string {
   const s = neg ? '-' : '';

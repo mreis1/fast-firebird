@@ -10,7 +10,8 @@ import {
 } from '../protocol/statement.js';
 import { nextFetchCount } from '../protocol/fetch-plan.js';
 import { readBlob, writeBlob } from '../protocol/blob.js';
-import { BlobRef, makeColumnReader, type ParamValue } from '../protocol/msgcodec.js';
+import { BlobRef, DecFloatVal, makeColumnReader, type ParamValue } from '../protocol/msgcodec.js';
+import { encodeDecFloat } from '../types/decfloat.js';
 import { resolveTextCodec, type TextCodec, type TextCodecOptions } from '../charset/decoder.js';
 import { StatementCache } from './statement-cache.js';
 import { Blob, type BlobScope } from './blob.js';
@@ -289,6 +290,13 @@ async function prepareParams(
       const bytes = typeof v === 'string' ? codecForDesc(d, opts, 'blob').encode(v) : v;
       const id = await writeBlob(wire, txHandle, bytes, opts.blobWriteChunkSize);
       prepared[i] = new BlobRef(id, d.subType);
+    } else if (v != null && (d.type === SqlType.DEC16 || d.type === SqlType.DEC34) && (typeof v === 'string' || typeof v === 'number' || typeof v === 'bigint')) {
+      // Native DECFLOAT encoding: a JS number would otherwise be sent as a
+      // binary double (lossy — '0.1' would pick up binary-rounding noise).
+      prepared[i] = new DecFloatVal(encodeDecFloat(String(v), d.type === SqlType.DEC16 ? 8 : 16));
+    } else if (v != null && d.type === SqlType.INT128 && typeof v === 'string' && /^[+-]?\d+$/.test(v)) {
+      // Integer string bound to INT128 → bigint (native 128-bit wire encoding).
+      prepared[i] = BigInt(v);
     } else {
       prepared[i] = v;
       // A text codec only applies to genuine text columns: for those, `subType`

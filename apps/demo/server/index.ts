@@ -6,9 +6,11 @@ import { existsSync } from 'node:fs';
 import { addServer, closeAll, getServer, listServerConfigs, type ServerConfig } from './servers.ts';
 import { benchmark, runQuery, serializeCell, type Engine } from './engines.ts';
 import { featuresFor, tryFeature } from './features.ts';
+import { runCustomBench, type CustomBenchRequest } from './custom-bench.ts';
 
 const PORT = Number(process.env.DEMO_API_PORT || 5178);
-const app = Fastify({ logger: false });
+// bodyLimit: custom-bench uploads blob files as base64 JSON (cap ~24 MB → ~18 MB file).
+const app = Fastify({ logger: false, bodyLimit: 24 * 1024 * 1024 });
 
 /** Strip secrets before sending a server config to the browser. */
 function publicConfig(c: ServerConfig) {
@@ -92,6 +94,17 @@ app.post('/api/servers/:id/try-feature', async (req) => {
   const { setup, sql } = req.body as { setup?: string[]; sql: string };
   const state = await getServer(id);
   return tryFeature(state, setup ?? [], sql);
+});
+
+app.post('/api/servers/:id/custom-bench', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const state = await getServer(id);
+  try {
+    return await runCustomBench(state, req.body as CustomBenchRequest);
+  } catch (err) {
+    reply.code(400);
+    return { error: (err as Error).message.split('\n').slice(0, 3).join(' ') };
+  }
 });
 
 app.post('/api/servers/:id/emit', async (req) => {

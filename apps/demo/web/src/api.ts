@@ -63,6 +63,40 @@ export interface TryResult {
   error?: string;
 }
 
+export const BENCH_TYPES = [
+  'integer',
+  'bigint',
+  'varchar(60)',
+  'numeric(12,2)',
+  'decfloat(34)',
+  'timestamp',
+  'boolean',
+  'blob binary',
+  'blob text',
+] as const;
+export type BenchColumnType = (typeof BENCH_TYPES)[number];
+
+export interface BenchColumnDef {
+  name: string;
+  type: BenchColumnType;
+  dataBase64?: string;
+}
+
+export interface CustomBenchResult {
+  table: string;
+  ddl: string;
+  rows: number;
+  insertMs: number;
+  insertRowsPerSec: number;
+  fetchMs: number;
+  fetchRowsPerSec: number;
+  fetchedRows: number;
+  blobBytesPerRow: number;
+  totalBlobBytes: number;
+  blobThroughputMBps: number | null;
+  error?: string;
+}
+
 async function json<T>(url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
     method: body ? 'POST' : 'GET',
@@ -84,6 +118,8 @@ export const api = {
   blob: (id: string) => json<{ note: string; binary: unknown }>(`/api/servers/${id}/blob`, {}),
   features: (id: string) => json<{ version: number; features: Feature[] }>(`/api/servers/${id}/features`),
   tryFeature: (id: string, setup: string[], sql: string) => json<TryResult>(`/api/servers/${id}/try-feature`, { setup, sql }),
+  customBench: (id: string, columns: BenchColumnDef[], rows: number) =>
+    json<CustomBenchResult>(`/api/servers/${id}/custom-bench`, { columns, rows }),
 };
 
 /**

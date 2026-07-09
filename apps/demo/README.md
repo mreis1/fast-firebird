@@ -16,6 +16,15 @@ compat backend — the same query, three faces.
 - **Row streaming** — a lazy, backpressured `queryStream` of N generated rows with live progress.
 - **Blobs** — write + read back a text blob (`café €`) and a binary blob.
 - **Micro-benchmark** — N parameterized inserts + a select, per stack.
+- **Custom benchmark** — design a table structure (name + type per column, blob
+  columns get a file picker for the payload), then time X parameterized inserts
+  (one transaction, statement-cache reuse) and a full fetch including eager blob
+  materialization — rows/s and MB/s of blob throughput.
+
+> **No JSON panel?** Firebird (3/4/5) has no JSON data type or `JSON_VALUE`-style
+> functions (verified against all three servers — `cast(… as json)` and
+> `json_value` both error). The Firebird idiom is a `BLOB SUB_TYPE TEXT` (or
+> varchar) column holding JSON handled by the application.
 
 ## Run it
 

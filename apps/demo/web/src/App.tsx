@@ -1,5 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, useSse, type BenchLane, type Engine, type Feature, type QueryResult, type ServerCfg, type ServerInfo, type TryResult } from './api';
+import {
+  api,
+  useSse,
+  BENCH_TYPES,
+  type BenchColumnType,
+  type BenchLane,
+  type CustomBenchResult,
+  type Engine,
+  type Feature,
+  type QueryResult,
+  type ServerCfg,
+  type ServerInfo,
+  type TryResult,
+} from './api';
 
 const ENGINES: Engine[] = ['core', 'drizzle', 'compat'];
 
@@ -52,6 +65,7 @@ export function App() {
         <StreamPanel key={`st-${active}`} id={active} />
         <BlobPanel key={`bl-${active}`} id={active} />
         <BenchPanel key={`bn-${active}`} id={active} />
+        <CustomBenchPanel key={`cb-${active}`} id={active} />
       </div>
 
       <div className="footer">
@@ -422,6 +436,133 @@ function FeatureCard({ id, f }: { id: string; f: Feature }) {
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+interface BenchCol {
+  name: string;
+  type: BenchColumnType;
+  file: File | null;
+}
+
+const fileToBase64 = (f: File) =>
+  new Promise<string>((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve((r.result as string).split(',')[1]!);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(f);
+  });
+
+function CustomBenchPanel({ id }: { id: string }) {
+  const [cols, setCols] = useState<BenchCol[]>([
+    { name: 'NAME', type: 'varchar(60)', file: null },
+    { name: 'PRICE', type: 'numeric(12,2)', file: null },
+    { name: 'DOC', type: 'blob binary', file: null },
+  ]);
+  const [rows, setRows] = useState(500);
+  const [res, setRes] = useState<CustomBenchResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const update = (i: number, patch: Partial<BenchCol>) =>
+    setCols((prev) => prev.map((c, j) => (j === i ? { ...c, ...patch } : c)));
+
+  const run = async () => {
+    setBusy(true);
+    setErr(null);
+    setRes(null);
+    try {
+      const payload = await Promise.all(
+        cols.map(async (c) => ({
+          name: c.name,
+          type: c.type,
+          dataBase64: c.type.startsWith('blob') && c.file ? await fileToBase64(c.file) : undefined,
+        })),
+      );
+      const r = await api.customBench(id, payload, rows);
+      if (r.error) setErr(r.error);
+      else setRes(r);
+    } catch (e) {
+      setErr(String((e as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card wide">
+      <h2>Custom benchmark — your table structure, timed</h2>
+      {cols.map((c, i) => (
+        <div className="row" style={{ marginBottom: 6 }} key={i}>
+          <input
+            style={{ maxWidth: 160 }}
+            value={c.name}
+            placeholder={`COL_${i}`}
+            onChange={(e) => update(i, { name: e.target.value.toUpperCase() })}
+          />
+          <select
+            style={{ maxWidth: 170 }}
+            value={c.type}
+            onChange={(e) => update(i, { type: e.target.value as BenchColumnType, file: null })}
+          >
+            {BENCH_TYPES.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+          {c.type.startsWith('blob') && (
+            <label className="file-pick">
+              <input type="file" onChange={(e) => update(i, { file: e.target.files?.[0] ?? null })} />
+              {c.file ? `${c.file.name} (${(c.file.size / 1024).toFixed(0)} KiB)` : 'pick a file… (default: 64 KiB)'}
+            </label>
+          )}
+          <button className="btn ghost" style={{ padding: '7px 11px' }} onClick={() => setCols((p) => p.filter((_, j) => j !== i))}>
+            ✕
+          </button>
+        </div>
+      ))}
+      <div className="row mt">
+        <button
+          className="btn ghost"
+          onClick={() => setCols((p) => [...p, { name: `COL_${p.length}`, type: 'integer', file: null }])}
+          disabled={cols.length >= 12}
+        >
+          + column
+        </button>
+        <span className="unit" style={{ marginLeft: 'auto' }}>rows</span>
+        <input style={{ maxWidth: 110 }} type="number" value={rows} onChange={(e) => setRows(Number(e.target.value))} />
+        <button className="btn" onClick={run} disabled={busy || cols.length === 0}>
+          {busy ? 'benchmarking…' : 'Test'}
+        </button>
+      </div>
+      {err && <div className="err-text" style={{ marginTop: 10 }}>{err}</div>}
+      {res && (
+        <>
+          <div className="lanes" style={{ marginTop: 14, gridTemplateColumns: '1fr 1fr' }}>
+            <div className="lane">
+              <div className="name core">insert · {res.rows} rows</div>
+              <div className="metric">{res.insertMs}<span className="unit"> ms</span></div>
+              <div className="unit">{res.insertRowsPerSec.toLocaleString()} rows/s{res.blobBytesPerRow > 0 ? ` · ${(res.blobBytesPerRow / 1024).toFixed(0)} KiB blob/row` : ''}</div>
+            </div>
+            <div className="lane">
+              <div className="name drizzle">fetch · {res.fetchedRows} rows{res.blobBytesPerRow > 0 ? ' + blobs' : ''}</div>
+              <div className="metric">{res.fetchMs}<span className="unit"> ms</span></div>
+              <div className="unit">
+                {res.fetchRowsPerSec.toLocaleString()} rows/s
+                {res.blobThroughputMBps != null ? ` · ${res.blobThroughputMBps} MB/s blob · ${(res.totalBlobBytes / 1024 / 1024).toFixed(1)} MiB total` : ''}
+              </div>
+            </div>
+          </div>
+          <details style={{ marginTop: 10 }}>
+            <summary style={{ cursor: 'pointer', color: 'var(--accent-2)', fontSize: 12 }}>DDL used</summary>
+            <pre className="feat-sql">{res.ddl}</pre>
+          </details>
+        </>
+      )}
+      <div className="note">
+        Inserts run parameterized in one transaction (statement-cache reuse); the fetch is a full scan with eager blob
+        materialization. Blob columns use your picked file per row.
+      </div>
     </div>
   );
 }
