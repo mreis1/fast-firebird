@@ -43,6 +43,34 @@ after cursor EOF, DSQL_drop on cache eviction, blob close after read.
    inline blob batching where available.
 7. **WireCompression** for high-latency/low-bandwidth links (zlib, negotiated).
 
+## Measured results vs node-firebird 1.1.10 (2026-07-09, FB5, defaults vs defaults)
+
+In-process TCP latency proxy (one-way delay per link; RTT ≈ 2×delay).
+`pnpm --filter @fast-firebird/benchmarks bench`. Both drivers warmed up;
+node-firebird needed 4 SRP connect retries during the run (its padded-scramble
+bug — see plans/research errata); fast-firebird needed none.
+
+| Scenario | Delay | fast-firebird | node-firebird | Speedup |
+|---|---|---|---|---|
+| warm select ×200 (open tx) | 0ms | 95 ms (202 RT) | 287 ms | 3.0× |
+| warm select ×200 (open tx) | 2ms | 1216 ms | 3573 ms | 2.9× |
+| warm select ×200 (open tx) | 10ms | 5013 ms | 14678 ms | 2.9× |
+| warm 1-row select ×200 (auto-tx) | 10ms | 14817 ms (600 RT) | 24622 ms | 1.7× |
+| scan 10k rows ×3 | 10ms | 2336 ms (85 RT) | 4141 ms | 1.8× |
+| insert 300 rows (1 tx) | 0/2/10ms | — | — | 2.0–2.6× |
+| blob 1MB write+read ×3 | 0ms | 199 ms (131 RT) | 2809 ms | **14.1×** |
+| blob 1MB write+read ×3 | 2ms | 950 ms | 36583 ms | **38.5×** |
+| blob 1MB write+read ×3 | 10ms | 3406 ms | 148376 ms | **43.6×** |
+| connect+detach ×10 | 10ms | 1438 ms | 1028 ms | 0.7× ¹ |
+
+¹ fast-firebird encrypts the wire by default (op_crypt = +1 RT + SRP256);
+node-firebird hardcodes wire crypt off. With `wireCrypt: 'disabled'` the
+connect cost is comparable. Everything else: defaults vs defaults.
+
+Blob dominance: node-firebird writes/reads 1024-byte segments (~1000 RTs/MB);
+we use 64KB segments (131 RTs for 3×(write+read) of 1MB) — raised to the wire
+maximum by default 2026-07-09.
+
 ## Benchmark harness (packages/benchmarks)
 
 - Compare: fast-firebird vs node-firebird vs node-firebird2.

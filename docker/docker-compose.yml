@@ -18,6 +18,9 @@ x-fb-common: &fb-common
     FIREBIRD_CONF_WireCrypt: Enabled
     # Let clients negotiate zlib wire compression.
     FIREBIRD_CONF_WireCompression: "true"
+    # Srp256 (default) plus plain Srp so legacy clients (npm node-firebird)
+    # and our sha1 tests can authenticate.
+    FIREBIRD_CONF_AuthServer: Srp256, Srp
   healthcheck:
     test: ["CMD", "bash", "-c", "</dev/tcp/127.0.0.1/3050"]
     interval: 2s

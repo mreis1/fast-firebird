@@ -118,12 +118,12 @@ async function readAccept(wire: WireConnection): Promise<AcceptPacket> {
   return { op, version, architecture, type, data, pluginName, isAuthenticated, keys };
 }
 
-export function sendContAuth(wire: WireConnection, authData: string, plugin: string): void {
+export function sendContAuth(wire: WireConnection, authData: string, plugin: string, pluginList = AUTH_PLUGIN_LIST): void {
   wire.writer
     .int32(Op.cont_auth)
     .string(authData, 'latin1')
     .string(plugin)
-    .string(AUTH_PLUGIN_LIST)
+    .string(pluginList)
     .uint32(0); // empty keys
   wire.flush();
 }
@@ -189,12 +189,16 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
       if (!activePlugin.startsWith('Srp')) {
         throw new FirebirdAuthError(`Server requested unsupported auth plugin '${activePlugin}'`);
       }
-      const { salt, serverKeyHex } = parseServerAuthData(serverData);
-      const proof = computeProof(activePlugin, opts.user, opts.password, salt, ephemeral, serverKeyHex);
+      const sd = parseServerAuthData(serverData);
+      const proof = computeProof(activePlugin, opts.user, opts.password, sd.salt, ephemeral, sd.serverKeyHex);
       sessionKey = proof.sessionKey;
       if (accept.op === Op.cond_accept) {
-        sendContAuth(wire, proof.proofHex, activePlugin);
-        // Ignore any op_cont_auth (server proof) until op_response.
+        // Each plugin gets exactly ONE proof attempt. The server re-sends a
+        // fresh salt+key when a proof fails (wrong password) rather than an
+        // error op_response, so a re-offer of an already-attempted plugin
+        // means authentication failed — stop, don't proof again forever.
+        const attempted = new Set<string>([activePlugin]);
+        sendContAuth(wire, proof.proofHex, activePlugin, activePlugin);
         for (;;) {
           const op = await wire.readOp();
           if (op === Op.response) {
@@ -202,10 +206,28 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
             break;
           }
           if (op === Op.cont_auth) {
-            await wire.readOpaque();
-            await wire.readString();
-            await wire.readString();
-            keys = await wire.readString();
+            const data = Buffer.from(await wire.readOpaque());
+            const nextPlugin = (await wire.readString()) || activePlugin;
+            await wire.readString(); // plugin list
+            const nextKeys = await wire.readString();
+            if (nextKeys) keys = nextKeys;
+            if (data.length === 0) continue; // server proof (M2) — ignore
+            if (attempted.has(nextPlugin)) {
+              throw new FirebirdAuthError(
+                'Your user name and password are not defined. Ask your database administrator to set up a Firebird login.',
+                335544472,
+                '28000',
+              );
+            }
+            if (!nextPlugin.startsWith('Srp')) {
+              throw new FirebirdAuthError(`Server switched to unsupported auth plugin '${nextPlugin}'`);
+            }
+            activePlugin = nextPlugin;
+            attempted.add(activePlugin);
+            const next = parseServerAuthData(data);
+            const p2 = computeProof(activePlugin, opts.user, opts.password, next.salt, ephemeral, next.serverKeyHex);
+            sessionKey = p2.sessionKey;
+            sendContAuth(wire, p2.proofHex, activePlugin, activePlugin);
             continue;
           }
           throw new FirebirdProtocolError(`Unexpected op ${op} during auth continuation`);
@@ -213,11 +235,11 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
       } else {
         dpbAuthData = proof.proofHex; // op_accept_data path: proof rides in the DPB
       }
-    } else {
-      // op_accept_data with no data (FB3, crypt off): SRP completes in
-      // response to the op_attach itself.
-      pendingAuth = { ephemeral, plugin: activePlugin, user: opts.user, password: opts.password };
     }
+    // Attach-time continuation stays available in every path: the server can
+    // still answer op_attach with op_cont_auth (FB3 crypt-off, or a plugin
+    // switch after a DPB-carried proof).
+    pendingAuth = { ephemeral, plugin: activePlugin, user: opts.user, password: opts.password };
   }
 
   // Wire encryption.

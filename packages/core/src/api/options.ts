@@ -105,7 +105,8 @@ export function resolveOptions(raw: FirebirdConnectionOptions & LegacyOptionAlia
     wireCompression: raw.wireCompression ?? false,
     authPlugin: raw.authPlugin === 'auto' ? undefined : (raw.authPlugin ?? (raw.pluginName as string | undefined)),
     blobAsText: raw.blobAsText ?? false,
-    blobWriteChunkSize: clamp(raw.blobWriteChunkSize ?? raw.blobChunkSize ?? 16_384, 1, 65_535),
+    // Wire maximum by default — blob throughput is round-trip-bound.
+    blobWriteChunkSize: clamp(raw.blobWriteChunkSize ?? raw.blobChunkSize ?? 65_535, 1, 65_535),
     blobReadChunkSize: clamp(raw.blobReadChunkSize ?? 65_535, 1, 65_535),
     fetchSize: clamp(raw.fetchSize ?? 400, 1, 65_535),
     charsetNoneEncoding: raw.charsetNoneEncoding,

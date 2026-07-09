@@ -102,6 +102,34 @@ await stmt.close();
 > automatically. Set `statementCacheSize: 0` if your workload mixes long-lived
 > connections with external migrations.
 
+## Performance vs node-firebird
+
+Measured against `node-firebird` 1.1.10 on Firebird 5 with an in-process
+latency proxy (`pnpm --filter @fast-firebird/benchmarks bench`), defaults vs
+defaults:
+
+| Scenario | 0ms | 10ms RTT link |
+|---|---|---|
+| warm select ×200 (open tx) | 3.0× | 2.9× |
+| 10k-row scan | 1.0× | 1.8× |
+| 300-row insert (1 tx) | 2.6× | 2.0× |
+| **1MB blob write+read** | **14×** | **44×** |
+
+Blobs dominate because legacy drivers use 1KB segments (~1000 round trips per
+MB); fast-firebird uses 64KB segments by default. The one case where
+fast-firebird is slower — bare connect — is because it encrypts the wire by
+default (SRP256 + `op_crypt`); pass `wireCrypt: 'disabled'` to match.
+
+## Wire encryption & compression
+
+```ts
+await connect({ /* … */ wireCrypt: 'required', wireCompression: true });
+```
+
+`wireCrypt` is `'enabled'` by default (Arc4, negotiated); `wireCompression`
+(zlib) is off by default and requires `WireCompression = true` on the server.
+When both are on, the wire is compressed then encrypted, matching fbclient.
+
 ## Design highlights
 
 - **Round-trip frugality**: statement allocate+prepare pipelined into one round

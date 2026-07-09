@@ -1,0 +1,17 @@
+{
+  "name": "@fast-firebird/benchmarks",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "bench": "tsx src/run.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fast-firebird/core": "workspace:*",
+    "node-firebird": "^1.1.9"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0"
+  }
+}

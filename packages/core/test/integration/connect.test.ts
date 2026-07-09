@@ -22,8 +22,18 @@ describe.each(FB_SERVERS)('connect to Firebird $version', ({ port, version }) =>
     await db.disconnect();
   });
 
-  it('rejects a wrong password', async () => {
-    await expect(connect({ ...FB_BASE, port, password: 'wrong' })).rejects.toThrow(/user name|password|login|install|error/i);
+  it('rejects a wrong password promptly (no auth-negotiation deadlock)', async () => {
+    const start = Date.now();
+    const err = await connect({ ...FB_BASE, port, password: 'wrong' }).catch((e) => e);
+    expect(String(err.message)).toMatch(/user name|password|login/i);
+    expect(err.gdsCode).toBe(335544472);
+    expect(Date.now() - start).toBeLessThan(5000); // must not hang on plugin re-offers
+  });
+
+  it('rejects a wrong password with plain Srp too', async () => {
+    await expect(connect({ ...FB_BASE, port, password: 'nope', authPlugin: 'Srp' })).rejects.toThrow(
+      /user name|password|login/i,
+    );
   });
 
   it('rejects a nonexistent database path', async () => {

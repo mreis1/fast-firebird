@@ -61,9 +61,17 @@ only when API surface stabilizes (avoid premature package fragmentation).
 - [x] INSERT/UPDATE/DELETE ... RETURNING via op_execute2
 - [x] SRP scramble fix: minimal (stripped) key bytes per srp.cpp — killed the
       ~1/128 intermittent login failure; deterministic short-key regression test
-- [ ] WireCompression (zlib)
+- [x] WireCompression (zlib): pipeline stage beneath Arc4 (compress→encrypt),
+      pflag_compress negotiation, tx-crypt flush barrier; 15 tests on FB3/4/5
+- [x] Benchmark harness vs node-firebird (`packages/benchmarks`) with in-process
+      latency proxy (0/2/10ms). Measured: warm select 3×, DML 2×, blob 14–44×
+      faster; results in `plans/performance.md`.
+- [x] SRP plugin-switch / wrong-password fix: server re-sends salt on failed
+      proof (not an error) — track attempted plugins, one proof each, fail fast
+      (was: 30s deadlock). Regression tests added.
+- [x] Blob default chunk raised to 64KB (wire max) — blob throughput is RT-bound
 - [ ] ChaCha wire crypt (FB4+)
-- [ ] Adaptive fetch sizing; benchmark harness vs node-firebird under latency
+- [ ] Adaptive fetch sizing; connection pool; streaming API
 
 ### M4 — Blobs, streaming, pooling
 - [ ] Segmented blob read/write; streaming APIs with backpressure
