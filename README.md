@@ -1,8 +1,12 @@
-# fast-firebird
+<p align="center">
+  <img src="./assets/logo.svg" alt="fast-firebird" width="620">
+</p>
 
-A next-generation Firebird SQL driver for Node.js. Pure TypeScript, zero native
-dependencies, speaking the Firebird wire protocol directly (protocol 13–16) with
-first-class support for **Firebird 3, 4, and 5**.
+<p align="center">
+  A next-generation Firebird SQL driver for Node.js — <b>pure TypeScript</b>, zero native
+  dependencies, speaking the Firebird wire protocol directly (protocol 13–16) with
+  first-class support for <b>Firebird 3, 4, and 5</b>.
+</p>
 
 > **Status: early but real.** Connect (SRP256/Srp auth; Arc4/ChaCha wire
 > encryption; zlib compression), transactions, a statement cache, prepared

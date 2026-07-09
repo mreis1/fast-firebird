@@ -46,6 +46,23 @@ export interface BenchLane {
   rows: number;
 }
 
+export interface Feature {
+  id: string;
+  since: 3 | 4 | 5;
+  title: string;
+  blurb: string;
+  setup: string[];
+  sql: string;
+  available: boolean;
+}
+
+export interface TryResult {
+  rows: Record<string, unknown>[];
+  rowCount: number;
+  ms: number;
+  error?: string;
+}
+
 async function json<T>(url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
     method: body ? 'POST' : 'GET',
@@ -65,6 +82,8 @@ export const api = {
   benchmark: (id: string, n: number) => json<{ n: number; lanes: BenchLane[] }>(`/api/servers/${id}/benchmark`, { n }),
   emit: (id: string, name: string) => json<{ emitted: string }>(`/api/servers/${id}/emit`, { name }),
   blob: (id: string) => json<{ note: string; binary: unknown }>(`/api/servers/${id}/blob`, {}),
+  features: (id: string) => json<{ version: number; features: Feature[] }>(`/api/servers/${id}/features`),
+  tryFeature: (id: string, setup: string[], sql: string) => json<TryResult>(`/api/servers/${id}/try-feature`, { setup, sql }),
 };
 
 /**
@@ -89,7 +108,9 @@ export function useSse<T = any>(
       setEvents((prev) => [...prev.slice(-(keep - 1)), data]);
       if (closeOn?.(data)) es.close();
     };
-    es.onerror = () => es.close();
+    // One-shot streams (closeOn set) must not auto-reconnect on the close that
+    // ends them; persistent streams (pool/events) should let the browser retry.
+    es.onerror = () => { if (closeOn) es.close(); };
     return () => es.close();
   }, [url]);
   return { events, clear: () => setEvents([]) };

@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="fast-firebird">
+  <defs>
+    <linearGradient id="ff-fire" x1="10" y1="118" x2="120" y2="16" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E42A0E"/>
+      <stop offset=".45" stop-color="#FF6A2C"/>
+      <stop offset=".8" stop-color="#FF9D3C"/>
+      <stop offset="1" stop-color="#FFD24A"/>
+    </linearGradient>
+  </defs>
+
+  <!-- speed streaks -->
+  <g stroke="url(#ff-fire)" stroke-linecap="round" fill="none">
+    <path d="M4 46h34" stroke-width="7" opacity=".35"/>
+    <path d="M2 66h40" stroke-width="8" opacity=".55"/>
+    <path d="M8 86h30" stroke-width="7" opacity=".35"/>
+  </g>
+
+  <!-- firebird in flight: body + swept wing + head, darting up-right -->
+  <path fill="url(#ff-fire)" d="
+    M40 92
+    C 52 96 66 92 76 82
+    C 70 88 58 88 54 82
+    C 70 84 84 74 88 58
+    C 82 66 72 68 66 64
+    C 86 60 100 44 100 22
+    C 108 40 112 58 104 74
+    C 118 66 124 52 122 36
+    C 128 60 118 86 96 98
+    C 78 108 54 106 40 92
+    Z"/>
+
+  <!-- head + beak -->
+  <path fill="url(#ff-fire)" d="M100 22 C 110 20 120 24 124 32 L 108 34 C 104 30 102 26 100 22 Z"/>
+  <!-- eye (negative space) -->
+  <circle cx="106" cy="30" r="2.4" fill="#0e1116"/>
+</svg>

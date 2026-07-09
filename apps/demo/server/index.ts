@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { addServer, closeAll, getServer, listServerConfigs, type ServerConfig } from './servers.ts';
 import { benchmark, runQuery, serializeCell, type Engine } from './engines.ts';
+import { featuresFor, tryFeature } from './features.ts';
 
 const PORT = Number(process.env.DEMO_API_PORT || 5178);
 const app = Fastify({ logger: false });
@@ -75,6 +76,24 @@ app.post('/api/servers/:id/benchmark', async (req) => {
   return { n: n ?? 200, lanes: await benchmark(state, Math.min(2000, Math.max(1, n ?? 200))) };
 });
 
+app.get('/api/servers/:id/features', async (req) => {
+  const { id } = req.params as { id: string };
+  const state = await getServer(id);
+  let version = state.config.version;
+  if (version == null) {
+    const [row] = await state.pool.use((att) => att.query(`select rdb$get_context('SYSTEM','ENGINE_VERSION') as V from rdb$database`));
+    version = Number(String((row as any)?.V ?? '').split('.')[0]) || undefined;
+  }
+  return { version, features: featuresFor(version) };
+});
+
+app.post('/api/servers/:id/try-feature', async (req) => {
+  const { id } = req.params as { id: string };
+  const { setup, sql } = req.body as { setup?: string[]; sql: string };
+  const state = await getServer(id);
+  return tryFeature(state, setup ?? [], sql);
+});
+
 app.post('/api/servers/:id/emit', async (req) => {
   const { id } = req.params as { id: string };
   const { name } = req.body as { name: string };
@@ -103,13 +122,21 @@ app.get('/api/servers/:id/pool', async (req, reply) => {
   const state = await getServer(id);
   reply.hijack();
   const ch = sse(reply);
-  const tick = () => ch.send({ t: Date.now(), ...state.pool.stats() });
-  tick();
-  const timer = setInterval(tick, 1000);
-  req.raw.on('close', () => {
+  let timer: ReturnType<typeof setInterval>;
+  const stop = () => {
     clearInterval(timer);
     ch.close();
-  });
+  };
+  const tick = () => {
+    try {
+      ch.send({ t: Date.now(), ...state.pool.stats() });
+    } catch {
+      stop(); // socket gone mid-write — don't leak the interval
+    }
+  };
+  tick();
+  timer = setInterval(tick, 1000);
+  req.raw.on('close', stop);
 });
 
 // ── SSE: live POST_EVENT feed ────────────────────────────────────────────────

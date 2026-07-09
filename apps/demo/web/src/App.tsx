@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, useSse, type BenchLane, type Engine, type QueryResult, type ServerCfg, type ServerInfo } from './api';
+import { api, useSse, type BenchLane, type Engine, type Feature, type QueryResult, type ServerCfg, type ServerInfo, type TryResult } from './api';
 
 const ENGINES: Engine[] = ['core', 'drizzle', 'compat'];
 
@@ -15,8 +15,10 @@ export function App() {
   return (
     <div className="app">
       <header className="top">
+        <img className="mark" src="/mark.svg" alt="" width={40} height={40} />
         <h1>
-          <span className="fire">🔥</span> fast-firebird <span style={{ color: 'var(--muted)' }}>· live dashboard</span>
+          <span className="wm-fast">fast-</span><span className="wm-bird">firebird</span>{' '}
+          <span style={{ color: 'var(--muted)', fontWeight: 400 }}>· live dashboard</span>
         </h1>
         <span className="sub">core · drizzle · node-firebird2-ext — one stack, three faces</span>
       </header>
@@ -45,6 +47,7 @@ export function App() {
         <InfoPanel key={`info-${active}`} id={active} />
         <PoolPanel key={`pool-${active}`} id={active} />
         <QueryPanel key={`q-${active}`} id={active} />
+        <FeaturesPanel key={`ft-${active}`} id={active} />
         <EventsPanel key={`ev-${active}`} id={active} />
         <StreamPanel key={`st-${active}`} id={active} />
         <BlobPanel key={`bl-${active}`} id={active} />
@@ -349,6 +352,76 @@ function BenchPanel({ id }: { id: string }) {
         </div>
       )}
       <div className="note">Inserts are parameterized; the Drizzle lane wraps core, so only its select is timed here.</div>
+    </div>
+  );
+}
+
+function FeaturesPanel({ id }: { id: string }) {
+  const [version, setVersion] = useState<number | null>(null);
+  const [features, setFeatures] = useState<Feature[]>([]);
+  useEffect(() => {
+    setFeatures([]);
+    setVersion(null);
+    api.features(id).then((r) => {
+      setVersion(r.version);
+      setFeatures(r.features);
+    });
+  }, [id]);
+
+  return (
+    <div className="card wide">
+      <h2>Feature explorer{version ? ` — what Firebird ${version} unlocks` : ''}</h2>
+      <div className="feat-grid">
+        {features.map((f) => (
+          <FeatureCard key={f.id} id={id} f={f} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FeatureCard({ id, f }: { id: string; f: Feature }) {
+  const [res, setRes] = useState<TryResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const cols = res && res.rows.length ? Object.keys(res.rows[0]) : [];
+  return (
+    <div className={`feat ${f.available ? '' : 'locked'}`}>
+      <div className="feat-head">
+        <span className="feat-title">{f.title}</span>
+        <span className={`badge since${f.since}`}>FB {f.since}+</span>
+      </div>
+      <div className="feat-blurb">{f.blurb}</div>
+      <details>
+        <summary>SQL</summary>
+        <pre className="feat-sql">{[...f.setup, f.sql].join(';\n')}</pre>
+      </details>
+      <div className="row mt">
+        <button
+          className="btn ghost"
+          disabled={!f.available || busy}
+          onClick={async () => {
+            setBusy(true);
+            setRes(await api.tryFeature(id, f.setup, f.sql));
+            setBusy(false);
+          }}
+        >
+          {busy ? '…' : f.available ? 'Try it' : `needs FB ${f.since}`}
+        </button>
+        {res && !res.error && <span className="unit">{res.rowCount} row{res.rowCount === 1 ? '' : 's'} · {res.ms} ms</span>}
+      </div>
+      {res?.error && <div className="err-text" style={{ marginTop: 8 }}>{res.error}</div>}
+      {res && !res.error && res.rows.length > 0 && (
+        <div className="scroll" style={{ marginTop: 8, maxHeight: 160 }}>
+          <table className="res">
+            <thead><tr>{cols.map((c) => <th key={c}>{c}</th>)}</tr></thead>
+            <tbody>
+              {res.rows.slice(0, 50).map((row, i) => (
+                <tr key={i}>{cols.map((c) => <td key={c}>{fmt(row[c])}</td>)}</tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

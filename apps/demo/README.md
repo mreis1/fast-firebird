@@ -11,6 +11,7 @@ compat backend — the same query, three faces.
 - **Connection** — protocol version, wire encryption (Arc4/ChaCha), compression, engine + server version (Services API).
 - **Connection pool (live)** — acquire/idle/in-use/waiting, streamed over SSE with a sparkline.
 - **SQL runner — three stacks** — run one query and time it through raw **core**, **Drizzle** (`db.execute(sql.raw(...))`), and the **node-firebird2-ext** compat facade, side by side.
+- **Feature explorer** — a version-aware catalog of what each Firebird release unlocks (FB3: BOOLEAN, window functions, IDENTITY; FB4: DECFLOAT, INT128, TIME ZONE, crypto hashes; FB5: multi-row RETURNING, SKIP LOCKED, MERGE … RETURNING). Each has runnable SQL; features above the selected server's version are shown but locked.
 - **Events (live)** — arm Firebird `POST_EVENT` names and fire them; events stream back over SSE.
 - **Row streaming** — a lazy, backpressured `queryStream` of N generated rows with live progress.
 - **Blobs** — write + read back a text blob (`café €`) and a binary blob.

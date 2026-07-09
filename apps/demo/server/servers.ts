@@ -79,7 +79,10 @@ export async function getServer(id: string): Promise<ServerState> {
     rejectReady = rej;
   });
 
-  const state = { config } as ServerState;
+  // `ready` MUST live on the state so the fast-path (`await existing.ready`)
+  // waits for init; otherwise a concurrent request during init gets a
+  // half-built state (pool undefined) and throws.
+  const state = { config, ready } as ServerState;
   states.set(id, state);
 
   (async () => {
