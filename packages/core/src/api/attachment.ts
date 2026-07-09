@@ -9,6 +9,7 @@ import { PreparedStatement } from './prepared.js';
 import { Transaction } from './transaction.js';
 import { resolveOptions, type FirebirdConnectionOptions, type LegacyOptionAliases, type ResolvedOptions } from './options.js';
 import { Op } from '../protocol/constants.js';
+import { executeScript, type ExecuteScriptOptions, type ScriptExecutionResult } from '../script/execute.js';
 import type { ParamValue } from '../protocol/msgcodec.js';
 
 export type ConnectInput = FirebirdConnectionOptions & LegacyOptionAliases;
@@ -187,6 +188,15 @@ export class Attachment {
    * for await (const row of db.queryStream('select * from big_table')) { … }
    * ```
    */
+  /**
+   * Parse and execute a multi-statement Firebird script (handles `SET TERM`,
+   * PSQL bodies, comments, strings). See `ExecuteScriptOptions` for
+   * transaction scoping and error handling.
+   */
+  executeScript(script: string, options?: ExecuteScriptOptions): Promise<ScriptExecutionResult> {
+    return executeScript(this, script, options);
+  }
+
   async *queryStream(sql: string, params: ParamValue[] = []): AsyncGenerator<Row> {
     const tx = await this.startTransaction();
     let ok = false;

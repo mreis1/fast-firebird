@@ -2,6 +2,12 @@ export { connect, create as createDatabase, Attachment, type ConnectInput } from
 export { Transaction } from './api/transaction.js';
 export { PreparedStatement } from './api/prepared.js';
 export { Pool, createPool, type PoolOptions, type PoolStats } from './pool/pool.js';
+export { parseScript, ScriptParseError, type ParsedStatement, type ParseScriptOptions } from './script/parser.js';
+export {
+  type ExecuteScriptOptions,
+  type ScriptExecutionResult,
+  type StatementResult,
+} from './script/execute.js';
 export type { QueryResult, Row } from './api/session.js';
 export type { TransactionOptions, IsolationLevel } from './protocol/transaction.js';
 export type { ParamValue } from './protocol/msgcodec.js';
