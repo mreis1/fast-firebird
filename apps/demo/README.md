@@ -50,7 +50,8 @@ pnpm --filter @fast-firebird/demo start
 
 The dashboard creates an isolated `ff_demo.fdb` per server on first use, so it
 never touches the test fixtures. Use **+ add server** to point it at any other
-database (read/write, wide open).
+database (read/write, wide open); custom servers can be removed with the ✕ on
+their tab (built-in FB3/4/5 are protected).
 
 ## Layout
 

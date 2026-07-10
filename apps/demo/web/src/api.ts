@@ -8,6 +8,8 @@ export interface ServerCfg {
   database: string;
   user: string;
   version?: number;
+  /** Built-in FB3/4/5 servers can't be removed. */
+  builtin?: boolean;
 }
 
 export interface ServerInfo {
@@ -97,9 +99,9 @@ export interface CustomBenchResult {
   error?: string;
 }
 
-async function json<T>(url: string, body?: unknown): Promise<T> {
+async function json<T>(url: string, body?: unknown, method?: string): Promise<T> {
   const res = await fetch(url, {
-    method: body ? 'POST' : 'GET',
+    method: method ?? (body ? 'POST' : 'GET'),
     headers: body ? { 'content-type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -110,6 +112,7 @@ async function json<T>(url: string, body?: unknown): Promise<T> {
 export const api = {
   servers: () => json<{ servers: ServerCfg[] }>('/api/servers'),
   addServer: (cfg: Partial<ServerCfg> & { password?: string }) => json<{ server: ServerCfg }>('/api/servers', cfg),
+  deleteServer: (id: string) => json<{ removed: string }>(`/api/servers/${id}`, undefined, 'DELETE'),
   info: (id: string) => json<ServerInfo>(`/api/servers/${id}/info`),
   query: (id: string, engine: Engine, sql: string, params: unknown[]) =>
     json<QueryResult>(`/api/servers/${id}/query`, { engine, sql, params }),

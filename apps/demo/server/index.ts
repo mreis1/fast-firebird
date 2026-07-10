@@ -3,7 +3,7 @@ import { connect, connectService } from '@fast-firebird/core';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { addServer, closeAll, getServer, listServerConfigs, type ServerConfig } from './servers.ts';
+import { addServer, closeAll, getServer, isBuiltinServer, listServerConfigs, removeServer, type ServerConfig } from './servers.ts';
 import { benchmark, runQuery, serializeCell, type Engine } from './engines.ts';
 import { featuresFor, tryFeature } from './features.ts';
 import { runCustomBench, type CustomBenchRequest } from './custom-bench.ts';
@@ -14,7 +14,7 @@ const app = Fastify({ logger: false, bodyLimit: 24 * 1024 * 1024 });
 
 /** Strip secrets before sending a server config to the browser. */
 function publicConfig(c: ServerConfig) {
-  return { id: c.id, label: c.label, host: c.host, port: c.port, database: c.database, user: c.user, version: c.version };
+  return { id: c.id, label: c.label, host: c.host, port: c.port, database: c.database, user: c.user, version: c.version, builtin: isBuiltinServer(c.id) };
 }
 
 /** Minimal SSE helper over the raw Node response. Returns send/close. */
@@ -38,6 +38,17 @@ app.get('/api/servers', async () => ({ servers: listServerConfigs().map(publicCo
 app.post('/api/servers', async (req) => {
   const cfg = addServer(req.body as any);
   return { server: publicConfig(cfg) };
+});
+
+app.delete('/api/servers/:id', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  try {
+    await removeServer(id);
+    return { removed: id };
+  } catch (err) {
+    reply.code(400);
+    return { error: (err as Error).message };
+  }
 });
 
 app.get('/api/servers/:id/info', async (req) => {

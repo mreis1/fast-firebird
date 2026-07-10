@@ -38,9 +38,31 @@ export function App() {
 
       <div className="servers">
         {servers.map((s) => (
-          <button key={s.id} className={`tab ${active === s.id ? 'active' : ''}`} onClick={() => setActive(s.id)}>
+          <span
+            key={s.id}
+            role="button"
+            className={`tab ${active === s.id ? 'active' : ''}`}
+            onClick={() => setActive(s.id)}
+          >
             <span className="dot" /> {s.label}
-          </button>
+            {!s.builtin && (
+              <span
+                className="tab-x"
+                title={`Remove ${s.label}`}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  await api.deleteServer(s.id).catch(() => void 0);
+                  setServers((prev) => {
+                    const next = prev.filter((x) => x.id !== s.id);
+                    setActive((cur) => (cur === s.id ? next[0]?.id ?? 'fb5' : cur));
+                    return next;
+                  });
+                }}
+              >
+                ✕
+              </span>
+            )}
+          </span>
         ))}
         <button className="tab add" onClick={() => setAdding((v) => !v)}>+ add server</button>
       </div>

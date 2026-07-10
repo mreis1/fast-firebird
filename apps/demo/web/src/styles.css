@@ -42,6 +42,11 @@ header.top .sub { color: var(--muted); font-size: 13px; width: 100%; }
 .tab .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .tab.active .dot { background: var(--green); }
 .tab.add { border-style: dashed; color: var(--muted); font-weight: 500; }
+.tab-x {
+  margin-left: 2px; width: 16px; height: 16px; border-radius: 4px; display: inline-flex;
+  align-items: center; justify-content: center; font-size: 11px; color: var(--muted);
+}
+.tab-x:hover { background: rgba(248,81,73,0.18); color: var(--red); }
 
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .grid .wide { grid-column: 1 / -1; }

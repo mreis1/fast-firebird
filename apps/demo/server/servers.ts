@@ -38,7 +38,12 @@ const DEFAULT_SERVERS: ServerConfig[] = [
 
 const configs = new Map<string, ServerConfig>();
 const states = new Map<string, ServerState>();
+const BUILTIN_IDS = new Set(DEFAULT_SERVERS.map((s) => s.id));
 for (const s of DEFAULT_SERVERS) configs.set(s.id, s);
+
+export function isBuiltinServer(id: string): boolean {
+  return BUILTIN_IDS.has(id);
+}
 
 export function listServerConfigs(): ServerConfig[] {
   return [...configs.values()];
@@ -49,6 +54,21 @@ export function addServer(cfg: Omit<ServerConfig, 'id'> & { id?: string }): Serv
   const full: ServerConfig = { ...cfg, id };
   configs.set(id, full);
   return full;
+}
+
+/** Remove a custom server and tear down its pooled connections. Built-ins are protected. */
+export async function removeServer(id: string): Promise<void> {
+  if (isBuiltinServer(id)) throw new Error('Built-in servers cannot be removed');
+  if (!configs.has(id)) throw new Error(`Unknown server '${id}'`);
+  configs.delete(id);
+  const st = states.get(id);
+  states.delete(id);
+  if (st) {
+    await st.ready.catch(() => void 0); // let any in-flight init settle before teardown
+    await st.ext?.stopPool?.().catch(() => void 0);
+    await st.pool?.close?.().catch(() => void 0);
+    await st.drizzleAtt?.disconnect?.().catch(() => void 0);
+  }
 }
 
 /** Ensure the demo database exists (create once, ignore "already exists"). */
