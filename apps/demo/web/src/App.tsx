@@ -487,7 +487,10 @@ function BenchPanel({ id }: { id: string }) {
           ))}
         </div>
       )}
-      <div className="note">Inserts are parameterized; the Drizzle lane wraps core, so only its select is timed here.</div>
+      <div className="note">
+        All lanes bind parameters: core/compat run <code>insert … values (?, ?)</code>; the drizzle lane goes through the
+        query builder (<code>db.insert().values()</code>), which binds via core underneath.
+      </div>
     </div>
   );
 }

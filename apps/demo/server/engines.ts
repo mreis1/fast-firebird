@@ -1,5 +1,12 @@
 import { sql } from 'drizzle-orm';
+import { firebirdTable, integer, varchar } from '@fast-firebird/drizzle';
 import type { ServerState } from './servers.ts';
+
+/** Drizzle schema for the micro-benchmark table (created by raw DDL below). */
+const BENCH_TABLE = firebirdTable('FF_DEMO_BENCH', {
+  ID: integer('ID').primaryKey(),
+  V: varchar('V', { length: 40 }),
+});
 
 export type Engine = 'core' | 'drizzle' | 'compat';
 
@@ -79,7 +86,7 @@ export async function runQuery(
 
 export interface BenchLane {
   engine: Engine;
-  /** N single-row parameterized inserts (ms). null when the lane doesn't bind params here. */
+  /** N single-row parameterized inserts (ms). */
   insertMs: number | null;
   /** One aggregate select (ms). */
   selectMs: number;
@@ -87,28 +94,37 @@ export interface BenchLane {
 }
 
 /**
- * Timed micro-benchmark. Inserts are parameterized, so only the lanes that bind
- * params here are timed for inserts (core, compat); the Drizzle lane is timed on
- * the raw select (it wraps core, so insert perf ≈ core + builder overhead).
+ * Timed micro-benchmark. All three lanes bind parameters: core and compat run
+ * `insert ... values (?, ?)`; the drizzle lane goes through the query builder
+ * (`db.insert(...).values(...)`), which binds params via core underneath.
  */
 export async function benchmark(state: ServerState, n: number): Promise<BenchLane[]> {
   const table = 'FF_DEMO_BENCH';
-  // Cached prepared statements from previous runs pin the table's metadata.
+  // Release every metadata pin before the recreate: the pool's statement
+  // caches, the drizzle attachment's cache, and the compat pool — its
+  // connections cached bench statements from previous runs, so cycle it.
   await state.pool.clearStatementCaches();
+  await state.drizzleAtt.clearStatementCache();
+  await state.ext.stopPool().catch(() => void 0);
   await state.pool.use((att) => att.transaction((tx) => tx.execute(`recreate table ${table} (ID integer not null primary key, V varchar(40))`), { wait: 10 }));
+  // Warm the compat pool back up so its first timed insert isn't a connect.
+  await state.ext.release(await state.ext.poolGet());
 
   const lanes: BenchLane[] = [];
   let base = 0;
   for (const engine of ['core', 'compat', 'drizzle'] as Engine[]) {
-    let insertMs: number | null = null;
-    if (engine !== 'drizzle') {
-      const t0 = performance.now();
+    const t0 = performance.now();
+    if (engine === 'drizzle') {
+      for (let i = 0; i < n; i++) {
+        await state.drizzle.insert(BENCH_TABLE).values({ ID: base + i + 1, V: `${engine}-${i}` });
+      }
+    } else {
       for (let i = 0; i < n; i++) {
         await runQuery(state, engine, `insert into ${table} (ID, V) values (?, ?)`, [base + i + 1, `${engine}-${i}`]);
       }
-      insertMs = +(performance.now() - t0).toFixed(1);
-      base += n;
     }
+    const insertMs = +(performance.now() - t0).toFixed(1);
+    base += n;
     const t1 = performance.now();
     const res = await runQuery(state, engine, `select count(*) as C from ${table}`, []);
     lanes.push({ engine, insertMs, selectMs: +(performance.now() - t1).toFixed(1), rows: Number((res.rows[0] as any)?.C ?? 0) });
