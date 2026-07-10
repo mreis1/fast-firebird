@@ -64,7 +64,40 @@ export async function blobTotalLength(wire: WireConnection, blobHandle: number):
   return value;
 }
 
-/** Read a whole blob by id. Round trips: 1 open + N segments + 1 close (deferred). */
+/**
+ * How many blob segment ops ride the wire before we start awaiting their
+ * responses. Serial segment I/O is round-trip-bound on remote links (a 1.8 MB
+ * blob = ~28 × RTT); a 32-deep window (~2 MiB in flight) covers such a blob
+ * in one burst. Measured at 30 ms RTT: 5×1.8 MB blobs went 6.0 s → 0.9 s
+ * insert and 5.5 s → 0.9 s fetch. Over-reading past EOF is safe: the server
+ * answers each extra op_get_segment with a clean empty EOF response
+ * (verified on FB 3/4/5).
+ */
+const PIPELINE_DEPTH = 32;
+
+/** Parse one op_get_segment response body (segments framed UInt16LE len + bytes). */
+async function readSegmentResponse(wire: WireConnection): Promise<{ data: Buffer; eof: boolean }> {
+  const resp = await wire.readResponse();
+  const raw = resp.data;
+  const parts: Buffer[] = [];
+  let pos = 0;
+  while (pos + 2 <= raw.length) {
+    const len = raw.readUInt16LE(pos);
+    pos += 2;
+    parts.push(Buffer.from(raw.subarray(pos, pos + len)));
+    pos += len;
+  }
+  return {
+    data: parts.length === 1 ? parts[0]! : Buffer.concat(parts),
+    eof: resp.handle === BLOB_SEGSTR_EOF_HANDLE,
+  };
+}
+
+/**
+ * Read a whole blob by id, with pipelined segment requests: keep
+ * PIPELINE_DEPTH op_get_segments in flight instead of one round trip per
+ * segment. Round trips ≈ 1 open + N/depth + 1 close (deferred).
+ */
 export async function readBlob(
   wire: WireConnection,
   txHandle: number,
@@ -72,17 +105,47 @@ export async function readBlob(
   chunkSize: number,
 ): Promise<Buffer> {
   const blobHandle = await openBlob(wire, txHandle, blobId);
+  const bufferLength = Math.min(Math.max(chunkSize, 1) + 2, MAX_SEGMENT_SIZE);
   const parts: Buffer[] = [];
-  for (;;) {
-    const seg = await getBlobSegment(wire, blobHandle, chunkSize);
-    if (seg.data.length > 0) parts.push(seg.data);
-    if (seg.eof) break;
+  let inFlight = 0;
+  let eof = false;
+  const request = () => {
+    wire.writer.int32(Op.get_segment).int32(blobHandle).int32(bufferLength).int32(0);
+    inFlight++;
+  };
+  for (let i = 0; i < PIPELINE_DEPTH; i++) request();
+  wire.flush();
+  try {
+    while (inFlight > 0) {
+      inFlight--; // the await below consumes this response even when it throws
+      const seg = await readSegmentResponse(wire);
+      if (eof) continue; // draining post-EOF over-reads (clean empty responses)
+      if (seg.data.length > 0) parts.push(seg.data);
+      if (seg.eof) {
+        eof = true;
+      } else {
+        request(); // top the window back up
+        wire.flush();
+      }
+    }
+  } catch (err) {
+    // Keep the connection usable: consume the responses still in flight.
+    while (inFlight > 0) {
+      inFlight--;
+      await wire.readResponse().catch(() => undefined);
+    }
+    closeBlobDeferred(wire, blobHandle);
+    throw err;
   }
   closeBlobDeferred(wire, blobHandle);
   return Buffer.concat(parts);
 }
 
-/** Create a blob and write `data` in segment batches. Returns the 8-byte blob id. */
+/**
+ * Create a blob and write `data` in pipelined segment batches (PIPELINE_DEPTH
+ * op_batch_segments in flight — errors still surface in order). Returns the
+ * 8-byte blob id. Round trips ≈ 1 create + N/depth + 1 close.
+ */
 export async function writeBlob(
   wire: WireConnection,
   txHandle: number,
@@ -96,21 +159,43 @@ export async function writeBlob(
   const blobId = created.oid;
 
   const segSize = Math.min(Math.max(chunkSize, 1), MAX_SEGMENT_SIZE - 2);
-  for (let off = 0; off < data.length || off === 0; off += segSize) {
-    const chunk = data.subarray(off, off + segSize);
-    const framed = Buffer.allocUnsafe(chunk.length + 2);
-    framed.writeUInt16LE(chunk.length, 0);
-    chunk.copy(framed, 2);
-    // P_SGMT = blob handle, p_sgmt_length, then the segment data as cstring.
-    wire.writer.int32(Op.batch_segments).int32(blobHandle).int32(framed.length).opaque(framed);
+  let inFlight = 0; // unconsumed responses on the wire (segments + close)
+  let closeSent = false;
+  try {
+    for (let off = 0; off < data.length || off === 0; off += segSize) {
+      const chunk = data.subarray(off, off + segSize);
+      const framed = Buffer.allocUnsafe(chunk.length + 2);
+      framed.writeUInt16LE(chunk.length, 0);
+      chunk.copy(framed, 2);
+      // P_SGMT = blob handle, p_sgmt_length, then the segment data as cstring.
+      wire.writer.int32(Op.batch_segments).int32(blobHandle).int32(framed.length).opaque(framed);
+      inFlight++;
+      if (inFlight >= PIPELINE_DEPTH) {
+        wire.flush();
+        inFlight--; // the await consumes this response even when it throws
+        await wire.readResponse(); // oldest in-flight segment
+      }
+      if (data.length === 0) break;
+    }
+    wire.writer.int32(Op.close_blob).int32(blobHandle);
+    closeSent = true;
+    inFlight++;
     wire.flush();
-    await wire.readResponse();
-    if (data.length === 0) break;
+    while (inFlight > 0) {
+      inFlight--;
+      await wire.readResponse();
+    }
+  } catch (err) {
+    // Keep the connection usable: every op we wrote was flushed by the time a
+    // response could throw — drain the responses still in flight, and close
+    // the abandoned blob handle (deferred; the rollback cleans the blob up).
+    while (inFlight > 0) {
+      inFlight--;
+      await wire.readResponse().catch(() => undefined);
+    }
+    if (!closeSent) closeBlobDeferred(wire, blobHandle);
+    throw err;
   }
-
-  wire.writer.int32(Op.close_blob).int32(blobHandle);
-  wire.flush();
-  await wire.readResponse();
 
   return blobId;
 }

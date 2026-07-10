@@ -10,7 +10,14 @@ export interface ServerCfg {
   version?: number;
   /** Built-in FB3/4/5 servers can't be removed. */
   builtin?: boolean;
+  /** True when the server currently has live pools/attachments. */
+  connected?: boolean;
+  /** Client requests zlib wire compression (server needs WireCompression=true). */
+  wireCompression?: boolean;
 }
+
+/** Lock-wait mode: undefined = engine default, true = wait, false = nowait, number = wait seconds. */
+export type TxWait = boolean | number | undefined;
 
 export interface ServerInfo {
   config: ServerCfg;
@@ -88,6 +95,7 @@ export interface CustomBenchResult {
   table: string;
   ddl: string;
   rows: number;
+  fetchConnections: number;
   insertMs: number;
   insertRowsPerSec: number;
   fetchMs: number;
@@ -113,16 +121,20 @@ export const api = {
   servers: () => json<{ servers: ServerCfg[] }>('/api/servers'),
   addServer: (cfg: Partial<ServerCfg> & { password?: string }) => json<{ server: ServerCfg }>('/api/servers', cfg),
   deleteServer: (id: string) => json<{ removed: string }>(`/api/servers/${id}`, undefined, 'DELETE'),
+  connectServer: (id: string) => json<{ id: string; connected: boolean }>(`/api/servers/${id}/connect`, {}),
+  updateServer: (id: string, patch: { wireCompression?: boolean }) =>
+    json<{ server: ServerCfg }>(`/api/servers/${id}/config`, patch),
+  disconnectServer: (id: string) => json<{ id: string; connected: boolean }>(`/api/servers/${id}/disconnect`, {}),
   info: (id: string) => json<ServerInfo>(`/api/servers/${id}/info`),
-  query: (id: string, engine: Engine, sql: string, params: unknown[]) =>
-    json<QueryResult>(`/api/servers/${id}/query`, { engine, sql, params }),
+  query: (id: string, engine: Engine, sql: string, params: unknown[], txWait?: TxWait) =>
+    json<QueryResult>(`/api/servers/${id}/query`, { engine, sql, params, txWait }),
   benchmark: (id: string, n: number) => json<{ n: number; lanes: BenchLane[] }>(`/api/servers/${id}/benchmark`, { n }),
   emit: (id: string, name: string) => json<{ emitted: string }>(`/api/servers/${id}/emit`, { name }),
   blob: (id: string) => json<{ note: string; binary: unknown }>(`/api/servers/${id}/blob`, {}),
   features: (id: string) => json<{ version: number; features: Feature[] }>(`/api/servers/${id}/features`),
   tryFeature: (id: string, setup: string[], sql: string) => json<TryResult>(`/api/servers/${id}/try-feature`, { setup, sql }),
-  customBench: (id: string, columns: BenchColumnDef[], rows: number) =>
-    json<CustomBenchResult>(`/api/servers/${id}/custom-bench`, { columns, rows }),
+  customBench: (id: string, columns: BenchColumnDef[], rows: number, ddlWait?: TxWait, fetchConnections?: number) =>
+    json<CustomBenchResult>(`/api/servers/${id}/custom-bench`, { columns, rows, ddlWait, fetchConnections }),
 };
 
 /**

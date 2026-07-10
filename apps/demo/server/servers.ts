@@ -16,6 +16,13 @@ export interface ServerConfig {
   password: string;
   /** Firebird major version, if known (for display). */
   version?: number;
+  /**
+   * Request zlib wire compression at the handshake. BOTH sides must opt in:
+   * the client sets the compression flag in its protocol offer, and the
+   * server must have `WireCompression = true` in firebird.conf (the docker
+   * matrix does). Applied on (re)connect.
+   */
+  wireCompression?: boolean;
 }
 
 export interface ServerState {
@@ -56,11 +63,43 @@ export function addServer(cfg: Omit<ServerConfig, 'id'> & { id?: string }): Serv
   return full;
 }
 
-/** Remove a custom server and tear down its pooled connections. Built-ins are protected. */
-export async function removeServer(id: string): Promise<void> {
-  if (isBuiltinServer(id)) throw new Error('Built-in servers cannot be removed');
+/** The one place demo connection options are built — every lane uses this. */
+export function connectOptsFor(config: ServerConfig) {
+  return {
+    host: config.host,
+    port: config.port,
+    database: config.database,
+    user: config.user,
+    password: config.password,
+    encoding: 'NONE' as const,
+    charsetNoneEncoding: 'win1252' as const,
+    wireCompression: config.wireCompression ?? false,
+  };
+}
+
+/**
+ * Patch a server's config (e.g. toggle wire compression) and tear down its
+ * live state — handshake-time settings only apply on the next connect.
+ */
+export async function updateServerConfig(id: string, patch: Partial<Pick<ServerConfig, 'wireCompression' | 'label'>>): Promise<ServerConfig> {
+  const config = configs.get(id);
+  if (!config) throw new Error(`Unknown server '${id}'`);
+  Object.assign(config, patch);
+  await disconnectServer(id);
+  return config;
+}
+
+/** True when the server has live pools/attachments right now. */
+export function isConnected(id: string): boolean {
+  return states.has(id);
+}
+
+/**
+ * Explicitly tear down a server's pools and attachments but KEEP its config —
+ * the next use (or an explicit connect) re-establishes everything.
+ */
+export async function disconnectServer(id: string): Promise<void> {
   if (!configs.has(id)) throw new Error(`Unknown server '${id}'`);
-  configs.delete(id);
   const st = states.get(id);
   states.delete(id);
   if (st) {
@@ -69,6 +108,14 @@ export async function removeServer(id: string): Promise<void> {
     await st.pool?.close?.().catch(() => void 0);
     await st.drizzleAtt?.disconnect?.().catch(() => void 0);
   }
+}
+
+/** Remove a custom server and tear down its pooled connections. Built-ins are protected. */
+export async function removeServer(id: string): Promise<void> {
+  if (isBuiltinServer(id)) throw new Error('Built-in servers cannot be removed');
+  if (!configs.has(id)) throw new Error(`Unknown server '${id}'`);
+  await disconnectServer(id);
+  configs.delete(id);
 }
 
 /** Ensure the demo database exists (create once, ignore "already exists"). */
@@ -90,7 +137,7 @@ export async function getServer(id: string): Promise<ServerState> {
   const config = configs.get(id);
   if (!config) throw new Error(`Unknown server '${id}'`);
 
-  const connectOpts = { host: config.host, port: config.port, database: config.database, user: config.user, password: config.password, encoding: 'NONE', charsetNoneEncoding: 'win1252' };
+  const connectOpts = connectOptsFor(config);
 
   let resolveReady!: () => void;
   let rejectReady!: (e: unknown) => void;
@@ -112,7 +159,7 @@ export async function getServer(id: string): Promise<ServerState> {
     state.drizzle = drizzle(state.drizzleAtt);
     state.ext = createFirebirdManager({
       name: `demo-${id}`,
-      driver: { attach: { host: config.host, port: config.port, database: config.database, user: config.user, password: config.password, encoding: 'NONE' } },
+      driver: { attach: { host: config.host, port: config.port, database: config.database, user: config.user, password: config.password, encoding: 'NONE', wireCompression: config.wireCompression ?? false } },
       pool: { min: 1, max: 4, sanitizeOnRelease: false },
     });
   })().then(resolveReady, rejectReady);

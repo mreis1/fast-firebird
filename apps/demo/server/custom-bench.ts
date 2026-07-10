@@ -25,12 +25,22 @@ export interface BenchColumn {
 export interface CustomBenchRequest {
   columns: BenchColumn[];
   rows: number;
+  /** Lock-wait mode for the DDL transaction: true = wait, false = nowait, number = wait seconds. */
+  ddlWait?: boolean | number;
+  /**
+   * Fetch across N pooled connections (ID-range partitions via pool.map).
+   * 1 = single connection (default). On links where a single TCP stream is
+   * window- or path-limited, parallel connections multiply throughput —
+   * if they don't, the bottleneck is raw bandwidth.
+   */
+  fetchConnections?: number;
 }
 
 export interface CustomBenchResult {
   table: string;
   ddl: string;
   rows: number;
+  fetchConnections: number;
   insertMs: number;
   insertRowsPerSec: number;
   fetchMs: number;
@@ -71,10 +81,19 @@ export async function runCustomBench(state: ServerState, req: CustomBenchRequest
 
   const blobBytesPerRow = cols.reduce((n, c) => n + (c.blob ? c.blob.length : 0), 0);
 
-  return state.pool.use(async (att) => {
-    await att.transaction((tx) => tx.execute(ddl), { wait: false });
+  const fetchConnections = Math.min(8, Math.max(1, Math.floor(req.fetchConnections ?? 1)));
 
-    // ── insert benchmark: one transaction, N parameterized inserts ──────────
+  // Cached prepared statements (previous runs, SQL-runner queries) pin the
+  // table's metadata — release them pool-wide or the recreate fails with
+  // "object FF_CUSTOM_BENCH is in use".
+  await state.pool.clearStatementCaches();
+
+  // ── DDL + insert benchmark: one connection, one transaction ──────────────
+  const insertMs = await state.pool.use(async (att) => {
+    // Default: wait up to 10s for stragglers (e.g. another tool holding a
+    // prepared statement) instead of failing instantly on nowait.
+    await att.transaction((tx) => tx.execute(ddl), { wait: req.ddlWait ?? 10 });
+
     const t0 = performance.now();
     await att.transaction(async (tx) => {
       for (let i = 0; i < rows; i++) {
@@ -82,26 +101,41 @@ export async function runCustomBench(state: ServerState, req: CustomBenchRequest
         await tx.execute(insertSql, params as never[]);
       }
     });
-    const insertMs = +(performance.now() - t0).toFixed(1);
-
-    // ── fetch benchmark: full scan incl. eager blob materialization ─────────
-    const t1 = performance.now();
-    const fetched = await att.query(`select * from ${table}`);
-    const fetchMs = +(performance.now() - t1).toFixed(1);
-
-    const totalBlobBytes = blobBytesPerRow * rows;
-    return {
-      table,
-      ddl,
-      rows,
-      insertMs,
-      insertRowsPerSec: Math.round((rows / Math.max(1, insertMs)) * 1000),
-      fetchMs,
-      fetchRowsPerSec: Math.round((fetched.length / Math.max(1, fetchMs)) * 1000),
-      fetchedRows: fetched.length,
-      blobBytesPerRow,
-      totalBlobBytes,
-      blobThroughputMBps: blobBytesPerRow > 0 ? +(totalBlobBytes / 1024 / 1024 / (fetchMs / 1000)).toFixed(1) : null,
-    };
+    return +(performance.now() - t0).toFixed(1);
   });
+
+  // ── fetch benchmark: full scan incl. eager blob materialization ──────────
+  // Optionally partitioned by ID stripes across N pooled connections — a
+  // per-connection TCP window multiplies out; a bandwidth ceiling doesn't.
+  const t1 = performance.now();
+  let fetchedRows: number;
+  if (fetchConnections <= 1) {
+    fetchedRows = (await state.pool.use((att) => att.query(`select * from ${table}`))).length;
+  } else {
+    const per = Math.ceil(rows / fetchConnections);
+    const parts = Array.from({ length: fetchConnections }, (_, i) => [i * per, Math.min(rows, (i + 1) * per) - 1] as const).filter(
+      ([lo, hi]) => lo <= hi,
+    );
+    const chunks = await state.pool.map(parts, (att, [lo, hi]) =>
+      att.query(`select * from ${table} where ID between ? and ?`, [lo, hi]),
+    );
+    fetchedRows = chunks.reduce((n, c) => n + c.length, 0);
+  }
+  const fetchMs = +(performance.now() - t1).toFixed(1);
+
+  const totalBlobBytes = blobBytesPerRow * rows;
+  return {
+    table,
+    ddl,
+    rows,
+    fetchConnections,
+    insertMs,
+    insertRowsPerSec: Math.round((rows / Math.max(1, insertMs)) * 1000),
+    fetchMs,
+    fetchRowsPerSec: Math.round((fetchedRows / Math.max(1, fetchMs)) * 1000),
+    fetchedRows,
+    blobBytesPerRow,
+    totalBlobBytes,
+    blobThroughputMBps: blobBytesPerRow > 0 ? +(totalBlobBytes / 1024 / 1024 / (fetchMs / 1000)).toFixed(1) : null,
+  };
 }

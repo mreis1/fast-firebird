@@ -285,6 +285,23 @@ export class Attachment {
     });
   }
 
+  /**
+   * Drop every cached prepared statement and release the server handles NOW
+   * (the deferred op_free_statements ride one op_ping round trip). Prepared
+   * statements pin table metadata, so run this before DDL like
+   * `recreate table` — otherwise it fails with "object ... is in use".
+   */
+  async clearStatementCache(): Promise<void> {
+    const cache = this.session.cache;
+    if (!cache || cache.size === 0) return;
+    await this.withLock(async () => {
+      cache.clear(); // queues one deferred op_free_statement per handle
+      this.wire.writer.int32(Op.ping);
+      this.wire.flush(); // the deferred frees ride this packet
+      await this.wire.readResponse();
+    });
+  }
+
   async disconnect(): Promise<void> {
     if (this.detached) return;
     this.detached = true;

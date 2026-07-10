@@ -19,7 +19,13 @@ compat backend — the same query, three faces.
 - **Custom benchmark** — design a table structure (name + type per column, blob
   columns get a file picker for the payload), then time X parameterized inserts
   (one transaction, statement-cache reuse) and a full fetch including eager blob
-  materialization — rows/s and MB/s of blob throughput.
+  materialization — rows/s and MB/s of blob throughput. A **lock wait** picker
+  controls the DDL transaction (default: wait up to 10 s; statement caches are
+  evicted pool-wide first so re-runs never hit "object in use").
+- **Connection lifecycle** — a *disconnect* button on the Connection panel
+  tears down the server's pools and attachments (Connect re-establishes them);
+  the SQL runner has the same **lock wait** picker (wait / no wait / wait N s,
+  applied on the core lane's transaction).
 
 > **No JSON panel?** Firebird (3/4/5) has no JSON data type or `JSON_VALUE`-style
 > functions (verified against all three servers — `cast(… as json)` and

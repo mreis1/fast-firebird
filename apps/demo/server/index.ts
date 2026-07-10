@@ -3,7 +3,7 @@ import { connect, connectService } from '@fast-firebird/core';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { addServer, closeAll, getServer, isBuiltinServer, listServerConfigs, removeServer, type ServerConfig } from './servers.ts';
+import { addServer, closeAll, connectOptsFor, disconnectServer, getServer, isBuiltinServer, isConnected, listServerConfigs, removeServer, updateServerConfig, type ServerConfig } from './servers.ts';
 import { benchmark, runQuery, serializeCell, type Engine } from './engines.ts';
 import { featuresFor, tryFeature } from './features.ts';
 import { runCustomBench, type CustomBenchRequest } from './custom-bench.ts';
@@ -14,7 +14,7 @@ const app = Fastify({ logger: false, bodyLimit: 24 * 1024 * 1024 });
 
 /** Strip secrets before sending a server config to the browser. */
 function publicConfig(c: ServerConfig) {
-  return { id: c.id, label: c.label, host: c.host, port: c.port, database: c.database, user: c.user, version: c.version, builtin: isBuiltinServer(c.id) };
+  return { id: c.id, label: c.label, host: c.host, port: c.port, database: c.database, user: c.user, version: c.version, builtin: isBuiltinServer(c.id), connected: isConnected(c.id), wireCompression: c.wireCompression ?? false };
 }
 
 /** Minimal SSE helper over the raw Node response. Returns send/close. */
@@ -51,6 +51,42 @@ app.delete('/api/servers/:id', async (req, reply) => {
   }
 });
 
+// Patch handshake-time settings (wire compression); applies on next connect.
+app.post('/api/servers/:id/config', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const { wireCompression } = req.body as { wireCompression?: boolean };
+  try {
+    const cfg = await updateServerConfig(id, { wireCompression: !!wireCompression });
+    return { server: publicConfig(cfg) };
+  } catch (err) {
+    reply.code(400);
+    return { error: (err as Error).message };
+  }
+});
+
+// Explicit connection lifecycle: tear down / re-establish pools + attachments.
+app.post('/api/servers/:id/disconnect', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  try {
+    await disconnectServer(id);
+    return { id, connected: false };
+  } catch (err) {
+    reply.code(400);
+    return { error: (err as Error).message };
+  }
+});
+
+app.post('/api/servers/:id/connect', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  try {
+    await getServer(id); // establishes pool + drizzle + compat lanes
+    return { id, connected: true };
+  } catch (err) {
+    reply.code(400);
+    return { error: (err as Error).message };
+  }
+});
+
 app.get('/api/servers/:id/info', async (req) => {
   const { id } = req.params as { id: string };
   const state = await getServer(id);
@@ -77,9 +113,9 @@ app.get('/api/servers/:id/info', async (req) => {
 
 app.post('/api/servers/:id/query', async (req) => {
   const { id } = req.params as { id: string };
-  const { sql, params, engine } = req.body as { sql: string; params?: unknown[]; engine: Engine };
+  const { sql, params, engine, txWait } = req.body as { sql: string; params?: unknown[]; engine: Engine; txWait?: boolean | number };
   const state = await getServer(id);
-  return runQuery(state, engine, sql, params ?? []);
+  return runQuery(state, engine, sql, params ?? [], txWait);
 });
 
 app.post('/api/servers/:id/benchmark', async (req) => {
@@ -170,7 +206,7 @@ app.get('/api/servers/:id/events', async (req, reply) => {
   const state = await getServer(id);
   reply.hijack();
   const ch = sse(reply);
-  const att = await connect({ host: state.config.host, port: state.config.port, database: state.config.database, user: state.config.user, password: state.config.password, encoding: 'NONE', charsetNoneEncoding: 'win1252' });
+  const att = await connect(connectOptsFor(state.config));
   const listener = await att.events(names.length ? names : ['demo_event']);
   ch.send({ armed: names.length ? names : ['demo_event'] });
   listener.on('post', (name: string, count: number) => ch.send({ name, count, t: Date.now() }));
@@ -191,7 +227,7 @@ app.get('/api/servers/:id/stream', async (req, reply) => {
   const state = await getServer(id);
   reply.hijack();
   const ch = sse(reply);
-  const att = await connect({ host: state.config.host, port: state.config.port, database: state.config.database, user: state.config.user, password: state.config.password, encoding: 'NONE', charsetNoneEncoding: 'win1252' });
+  const att = await connect(connectOptsFor(state.config));
   let closed = false;
   req.raw.on('close', () => { closed = true; });
   try {

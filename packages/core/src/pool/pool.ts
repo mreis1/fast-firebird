@@ -183,6 +183,19 @@ export class Pool {
     this.idle.push({ conn, since: Date.now() });
   }
 
+  /**
+   * Clear the statement cache on every pooled connection. Idle connections
+   * release their server handles immediately (one ping each, in parallel);
+   * in-use connections clear lazily — their deferred frees ride the next
+   * packet they send. Call before DDL (`recreate table`, `drop`, `alter`)
+   * on objects the pool has queried, or the DDL fails with
+   * "object ... is in use" (cached prepared statements pin table metadata).
+   */
+  async clearStatementCaches(): Promise<void> {
+    await Promise.all(this.idle.map((e) => e.conn.clearStatementCache().catch(() => undefined)));
+    for (const conn of this.inUse) conn.session.cache?.clear();
+  }
+
   /** Acquire → run `fn` → release (even on error). The safe default. */
   async use<T>(fn: (conn: Attachment) => Promise<T>): Promise<T> {
     const conn = await this.acquire();

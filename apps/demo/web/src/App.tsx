@@ -12,6 +12,7 @@ import {
   type ServerCfg,
   type ServerInfo,
   type TryResult,
+  type TxWait,
 } from './api';
 
 const ENGINES: Engine[] = ['core', 'drizzle', 'compat'];
@@ -20,10 +21,34 @@ export function App() {
   const [servers, setServers] = useState<ServerCfg[]>([]);
   const [active, setActive] = useState<string>('fb5');
   const [adding, setAdding] = useState(false);
+  /** Servers the user explicitly disconnected — panels stay down until reconnect. */
+  const [offline, setOffline] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     api.servers().then((r) => setServers(r.servers));
   }, []);
+
+  const disconnect = async (id: string) => {
+    await api.disconnectServer(id).catch(() => void 0);
+    setOffline((prev) => new Set(prev).add(id));
+  };
+  const reconnect = async (id: string) => {
+    await api.connectServer(id);
+    setOffline((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  };
+  const isOffline = offline.has(active);
+  const activeLabel = servers.find((s) => s.id === active)?.label ?? active;
+  /** Bumped when a server's handshake config changes — remounts panels so they reconnect. */
+  const [nonce, setNonce] = useState(0);
+  const toggleCompression = async (want: boolean) => {
+    const { server } = await api.updateServer(active, { wireCompression: want });
+    setServers((prev) => prev.map((s) => (s.id === server.id ? server : s)));
+    setNonce((n) => n + 1); // config applies on reconnect — remount all panels
+  };
 
   return (
     <div className="app">
@@ -78,17 +103,27 @@ export function App() {
         />
       )}
 
-      <div className="grid">
-        <InfoPanel key={`info-${active}`} id={active} />
-        <PoolPanel key={`pool-${active}`} id={active} />
-        <QueryPanel key={`q-${active}`} id={active} />
-        <FeaturesPanel key={`ft-${active}`} id={active} />
-        <EventsPanel key={`ev-${active}`} id={active} />
-        <StreamPanel key={`st-${active}`} id={active} />
-        <BlobPanel key={`bl-${active}`} id={active} />
-        <BenchPanel key={`bn-${active}`} id={active} />
-        <CustomBenchPanel key={`cb-${active}`} id={active} />
-      </div>
+      {isOffline ? (
+        <div className="card wide">
+          <h2>Connection</h2>
+          <div className="note" style={{ marginTop: 0, marginBottom: 12 }}>
+            disconnected — pools and attachments for “{activeLabel}” are closed on the server.
+          </div>
+          <button className="btn" onClick={() => reconnect(active)}>Connect</button>
+        </div>
+      ) : (
+        <div className="grid">
+          <InfoPanel key={`info-${active}-${nonce}`} id={active} onDisconnect={() => disconnect(active)} onToggleCompression={toggleCompression} />
+          <PoolPanel key={`pool-${active}-${nonce}`} id={active} />
+          <QueryPanel key={`q-${active}`} id={active} />
+          <FeaturesPanel key={`ft-${active}`} id={active} />
+          <EventsPanel key={`ev-${active}-${nonce}`} id={active} />
+          <StreamPanel key={`st-${active}`} id={active} />
+          <BlobPanel key={`bl-${active}`} id={active} />
+          <BenchPanel key={`bn-${active}`} id={active} />
+          <CustomBenchPanel key={`cb-${active}`} id={active} />
+        </div>
+      )}
 
       <div className="footer">
         Pure-TypeScript Firebird driver · SRP + WireCrypt + WireCompression · CHARSET NONE/win1252 · FB 3/4/5
@@ -99,6 +134,7 @@ export function App() {
 
 function AddServer({ onAdd }: { onAdd: (cfg: any) => void }) {
   const [f, setF] = useState({ label: 'Custom', host: '127.0.0.1', port: 3050, database: '', user: 'SYSDBA', password: 'masterkey' });
+  const [zlib, setZlib] = useState(false);
   const set = (k: string) => (e: any) => setF({ ...f, [k]: e.target.value });
   return (
     <div className="card wide" style={{ marginBottom: 16 }}>
@@ -110,14 +146,21 @@ function AddServer({ onAdd }: { onAdd: (cfg: any) => void }) {
         <input style={{ flex: 1, minWidth: 200 }} placeholder="/path/to/db.fdb" value={f.database} onChange={set('database')} />
         <input style={{ maxWidth: 110 }} placeholder="user" value={f.user} onChange={set('user')} />
         <input style={{ maxWidth: 130 }} placeholder="password" type="password" value={f.password} onChange={set('password')} />
-        <button className="btn" onClick={() => onAdd({ ...f, port: Number(f.port) })}>Connect</button>
+        <label className="unit" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+          <input type="checkbox" style={{ width: 'auto' }} checked={zlib} onChange={(e) => setZlib(e.target.checked)} />
+          zlib compression
+        </label>
+        <button className="btn" onClick={() => onAdd({ ...f, port: Number(f.port), wireCompression: zlib })}>Connect</button>
       </div>
-      <div className="note">Read/write, wide open — points at whatever database you give it.</div>
+      <div className="note">
+        Read/write, wide open — points at whatever database you give it. Compression needs the server to allow it
+        (<code>WireCompression = true</code> in firebird.conf).
+      </div>
     </div>
   );
 }
 
-function InfoPanel({ id }: { id: string }) {
+function InfoPanel({ id, onDisconnect, onToggleCompression }: { id: string; onDisconnect: () => void; onToggleCompression: (want: boolean) => void }) {
   const [info, setInfo] = useState<ServerInfo | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
@@ -128,7 +171,12 @@ function InfoPanel({ id }: { id: string }) {
 
   return (
     <div className="card">
-      <h2>Connection</h2>
+      <h2 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        Connection
+        <button className="btn ghost" style={{ padding: '3px 10px', fontSize: 11, textTransform: 'none', letterSpacing: 0 }} onClick={onDisconnect}>
+          disconnect
+        </button>
+      </h2>
       {err && <div className="err-text">{err}</div>}
       {!info && !err && <div className="note">connecting…</div>}
       {info && (
@@ -144,7 +192,16 @@ function InfoPanel({ id }: { id: string }) {
             {info.wireEncrypted ? <span className="badge on">{info.wireCryptPlugin}</span> : <span className="badge off">off</span>}
           </span>
           <b>compression</b>
-          <span>{info.wireCompressed ? <span className="badge on">zlib</span> : <span className="badge off">off</span>}</span>
+          <span>
+            {info.wireCompressed ? <span className="badge on">zlib</span> : <span className="badge off">off</span>}{' '}
+            <a
+              style={{ color: 'var(--accent-2)', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}
+              title="zlib is negotiated at the handshake: the client must request it AND the server must have WireCompression = true in firebird.conf. Reconnects this server."
+              onClick={() => onToggleCompression(!info.config.wireCompression)}
+            >
+              {info.config.wireCompression ? 'disable' : 'enable'} & reconnect
+            </a>
+          </span>
           <b>database</b>
           <span style={{ fontSize: 11 }}>{info.config.database}</span>
         </div>
@@ -185,10 +242,52 @@ function PoolPanel({ id }: { id: string }) {
   );
 }
 
+/**
+ * Lock-wait picker: default (engine default) | wait | no wait | wait N seconds.
+ * Emits undefined / true / false / number — the shape core's TPB builder takes.
+ */
+function TxWaitPicker({ value, onChange, defaultLabel = 'default' }: { value: TxWait; onChange: (v: TxWait) => void; defaultLabel?: string }) {
+  const [secs, setSecs] = useState(typeof value === 'number' ? value : 10);
+  const mode = value === undefined ? 'default' : value === true ? 'wait' : value === false ? 'nowait' : 'timeout';
+  return (
+    <div className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
+      <span className="unit">lock wait</span>
+      <div className="seg">
+        {(['default', 'wait', 'nowait', 'timeout'] as const).map((m) => (
+          <button
+            key={m}
+            className={mode === m ? 'active' : ''}
+            onClick={() => onChange(m === 'default' ? undefined : m === 'wait' ? true : m === 'nowait' ? false : secs)}
+          >
+            {m === 'default' ? defaultLabel : m === 'nowait' ? 'no wait' : m === 'timeout' ? 'wait for…' : m}
+          </button>
+        ))}
+      </div>
+      {mode === 'timeout' && (
+        <>
+          <input
+            style={{ maxWidth: 64 }}
+            type="number"
+            min={1}
+            value={secs}
+            onChange={(e) => {
+              const n = Math.max(1, Number(e.target.value) || 1);
+              setSecs(n);
+              onChange(n);
+            }}
+          />
+          <span className="unit">s</span>
+        </>
+      )}
+    </div>
+  );
+}
+
 function QueryPanel({ id }: { id: string }) {
   const [sql, setSql] = useState("select rdb$relation_name as name, rdb$relation_id as id\nfrom rdb$relations where rdb$system_flag = 0\norder by 1");
   const [paramsText, setParamsText] = useState('[]');
   const [engine, setEngine] = useState<Engine | 'all'>('all');
+  const [txWait, setTxWait] = useState<TxWait>(undefined);
   const [results, setResults] = useState<QueryResult[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -207,7 +306,7 @@ function QueryPanel({ id }: { id: string }) {
     }
     try {
       const engines = engine === 'all' ? ENGINES : [engine];
-      const res = await Promise.all(engines.map((e) => api.query(id, e, sql, params)));
+      const res = await Promise.all(engines.map((e) => api.query(id, e, sql, params, txWait)));
       setResults(res);
     } catch (e) {
       setErr(String((e as Error).message));
@@ -232,6 +331,7 @@ function QueryPanel({ id }: { id: string }) {
             </button>
           ))}
         </div>
+        <TxWaitPicker value={txWait} onChange={setTxWait} />
         <button className="btn" onClick={run} disabled={busy}>
           {busy ? 'running…' : 'Run'}
         </button>
@@ -483,6 +583,8 @@ function CustomBenchPanel({ id }: { id: string }) {
     { name: 'DOC', type: 'blob binary', file: null },
   ]);
   const [rows, setRows] = useState(500);
+  const [ddlWait, setDdlWait] = useState<TxWait>(undefined); // server default: wait 10 s
+  const [fetchConns, setFetchConns] = useState(1);
   const [res, setRes] = useState<CustomBenchResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -502,7 +604,7 @@ function CustomBenchPanel({ id }: { id: string }) {
           dataBase64: c.type.startsWith('blob') && c.file ? await fileToBase64(c.file) : undefined,
         })),
       );
-      const r = await api.customBench(id, payload, rows);
+      const r = await api.customBench(id, payload, rows, ddlWait, fetchConns);
       if (r.error) setErr(r.error);
       else setRes(r);
     } catch (e) {
@@ -551,7 +653,17 @@ function CustomBenchPanel({ id }: { id: string }) {
         >
           + column
         </button>
-        <span className="unit" style={{ marginLeft: 'auto' }}>rows</span>
+        <span style={{ marginLeft: 'auto' }} />
+        <TxWaitPicker value={ddlWait} onChange={setDdlWait} defaultLabel="wait 10 s" />
+        <span className="unit">fetch conns</span>
+        <div className="seg">
+          {[1, 2, 4, 8].map((n) => (
+            <button key={n} className={fetchConns === n ? 'active' : ''} onClick={() => setFetchConns(n)}>
+              {n}
+            </button>
+          ))}
+        </div>
+        <span className="unit">rows</span>
         <input style={{ maxWidth: 110 }} type="number" value={rows} onChange={(e) => setRows(Number(e.target.value))} />
         <button className="btn" onClick={run} disabled={busy || cols.length === 0}>
           {busy ? 'benchmarking…' : 'Test'}
@@ -567,7 +679,10 @@ function CustomBenchPanel({ id }: { id: string }) {
               <div className="unit">{res.insertRowsPerSec.toLocaleString()} rows/s{res.blobBytesPerRow > 0 ? ` · ${(res.blobBytesPerRow / 1024).toFixed(0)} KiB blob/row` : ''}</div>
             </div>
             <div className="lane">
-              <div className="name drizzle">fetch · {res.fetchedRows} rows{res.blobBytesPerRow > 0 ? ' + blobs' : ''}</div>
+              <div className="name drizzle">
+                fetch · {res.fetchedRows} rows{res.blobBytesPerRow > 0 ? ' + blobs' : ''}
+                {res.fetchConnections > 1 ? ` · ${res.fetchConnections} conns` : ''}
+              </div>
               <div className="metric">{res.fetchMs}<span className="unit"> ms</span></div>
               <div className="unit">
                 {res.fetchRowsPerSec.toLocaleString()} rows/s

@@ -80,13 +80,28 @@ export class Transaction {
   async commit(): Promise<void> {
     this.assertActive();
     this.finished = true;
-    await this.att.withLock(() => commitTransaction(this.att.wire, this.handle));
+    try {
+      await this.att.withLock(() => commitTransaction(this.att.wire, this.handle));
+    } catch (err) {
+      // A refused commit leaves the transaction ALIVE server-side — e.g. DDL
+      // metadata locks are taken at commit time, so "object in use" surfaces
+      // here, not at execute. Reopen so the owner can roll back instead of
+      // leaking an active transaction (which blocks all later DDL with
+      // "update conflicts with concurrent update").
+      this.finished = false;
+      throw err;
+    }
   }
 
   async rollback(): Promise<void> {
     this.assertActive();
     this.finished = true;
-    await this.att.withLock(() => rollbackTransaction(this.att.wire, this.handle));
+    try {
+      await this.att.withLock(() => rollbackTransaction(this.att.wire, this.handle));
+    } catch (err) {
+      this.finished = false;
+      throw err;
+    }
   }
 
   /** Commit but keep the transaction context open for further work. */
