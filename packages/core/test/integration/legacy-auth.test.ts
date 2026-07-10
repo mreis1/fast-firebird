@@ -81,3 +81,80 @@ describe('Legacy_Auth (migration path)', () => {
     }
   });
 });
+
+// Server-initiated fallback: the client does NOT force authPlugin — the server
+// walks its AuthServer list (Srp256 → Srp → Legacy_Auth) and the driver must
+// follow the switch mid-handshake, exactly like fbclient's default AuthClient.
+describe('Legacy_Auth server-initiated fallback', () => {
+  let admin: Attachment;
+
+  const authMethod = async (db: Attachment) => {
+    const [r] = await db.query(
+      'select MON$AUTH_METHOD as M from MON$ATTACHMENTS where MON$ATTACHMENT_ID = current_connection',
+    );
+    return String((r as any).M ?? '').trim();
+  };
+
+  beforeAll(async () => {
+    admin = await connect({ ...FB_BASE, port: LEGACY_PORT, wireCrypt: 'disabled' });
+    // LEGDRIFT exists in BOTH managers with DIFFERENT passwords — the classic
+    // gsec-managed server: the SRP verifier is stale, the legacy one current.
+    await admin.execute(`create or alter user LEGDRIFT password 'srp-stale' using plugin Srp`);
+    await admin.execute(`create or alter user LEGDRIFT password 'leg-current' using plugin Legacy_UserManager`);
+    // LEGSOLO exists ONLY in the legacy security database.
+    await admin.execute(`create or alter user LEGSOLO password 'legsolo1' using plugin Legacy_UserManager`);
+  }, HOOK_TIMEOUT);
+
+  afterAll(async () => {
+    await admin?.execute('drop user LEGDRIFT using plugin Srp').catch(() => undefined);
+    await admin?.execute('drop user LEGDRIFT using plugin Legacy_UserManager').catch(() => undefined);
+    await admin?.execute('drop user LEGSOLO using plugin Legacy_UserManager').catch(() => undefined);
+    await admin?.disconnect();
+  });
+
+  it('falls back to Legacy_Auth when the SRP password is stale (drifted account)', async () => {
+    const db = await connect({
+      ...FB_BASE,
+      port: LEGACY_PORT,
+      user: 'LEGDRIFT',
+      password: 'leg-current', // matches legacy only; Srp256+Srp proofs fail first
+      wireCrypt: 'disabled',
+    });
+    try {
+      expect(await authMethod(db)).toBe('Legacy_Auth');
+      expect(db.wireEncrypted).toBe(false);
+    } finally {
+      await db.disconnect();
+    }
+  });
+
+  it('authenticates a legacy-only account without authPlugin', async () => {
+    const db = await connect({
+      ...FB_BASE,
+      port: LEGACY_PORT,
+      user: 'LEGSOLO',
+      password: 'legsolo1',
+      wireCrypt: 'disabled',
+    });
+    try {
+      expect(await authMethod(db)).toBe('Legacy_Auth');
+    } finally {
+      await db.disconnect();
+    }
+  });
+
+  it('still prefers SRP when the SRP password matches', async () => {
+    const db = await connect({ ...FB_BASE, port: LEGACY_PORT, wireCrypt: 'disabled' });
+    try {
+      expect(await authMethod(db)).toMatch(/^Srp/);
+    } finally {
+      await db.disconnect();
+    }
+  });
+
+  it('rejects a password wrong in every manager (no hang, proper login error)', async () => {
+    await expect(
+      connect({ ...FB_BASE, port: LEGACY_PORT, user: 'LEGDRIFT', password: 'nope', wireCrypt: 'disabled' }),
+    ).rejects.toThrow(/user name and password are not defined/i);
+  }, 15_000);
+});

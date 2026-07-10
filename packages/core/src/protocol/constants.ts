@@ -131,8 +131,9 @@ export const enum WireCryptLevel {
   required = 2,
 }
 
-/** Plugins we can actually complete; Legacy_Auth lands later. */
-export const AUTH_PLUGIN_LIST = 'Srp256,Srp';
+/** Client plugin list — mirrors fbclient's default `AuthClient` so the server
+ *  can steer to Legacy_Auth when an account only authenticates there. */
+export const AUTH_PLUGIN_LIST = 'Srp256,Srp,Legacy_Auth';
 
 // ── DPB (database parameter buffer) ────────────────────────────────────────
 export const enum Dpb {

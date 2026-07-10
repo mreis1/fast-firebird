@@ -136,6 +136,36 @@ export function sendContAuth(wire: WireConnection, authData: string, plugin: str
   wire.flush();
 }
 
+const LOGIN_ERROR = () =>
+  new FirebirdAuthError(
+    'Your user name and password are not defined. Ask your database administrator to set up a Firebird login.',
+    335544472,
+    '28000',
+  );
+
+/**
+ * Await the outcome of a Legacy_Auth token. Legacy_Auth is one-shot: the
+ * server answers op_response on success; a re-offer (op_cont_auth) means the
+ * legacy credentials were rejected.
+ */
+async function drainLegacyResponse(wire: WireConnection): Promise<void> {
+  for (;;) {
+    const op = await wire.readOp();
+    if (op === Op.response) {
+      await wire.parseResponseBody();
+      return;
+    }
+    if (op === Op.cont_auth) {
+      await wire.readOpaque();
+      await wire.readString();
+      await wire.readString();
+      await wire.readString();
+      throw LOGIN_ERROR();
+    }
+    throw new FirebirdProtocolError(`Unexpected op ${op} during Legacy_Auth continuation`);
+  }
+}
+
 export async function performHandshake(wire: WireConnection, opts: HandshakeOptions): Promise<HandshakeResult> {
   const isLegacy = opts.authPlugin === 'Legacy_Auth';
   const plugin = isLegacy ? 'Legacy_Auth' : (opts.authPlugin ?? AUTH_PLUGIN_LIST.split(',')[0]!);
@@ -186,26 +216,7 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
     if (accept.op === Op.cond_accept) {
       // Server wants the token via continuation.
       sendContAuth(wire, legacyToken!, 'Legacy_Auth', 'Legacy_Auth');
-      for (;;) {
-        const op = await wire.readOp();
-        if (op === Op.response) {
-          await wire.parseResponseBody();
-          break;
-        }
-        if (op === Op.cont_auth) {
-          await wire.readOpaque();
-          await wire.readString();
-          await wire.readString();
-          await wire.readString();
-          // A re-offer means the legacy credentials were rejected.
-          throw new FirebirdAuthError(
-            'Your user name and password are not defined. Ask your database administrator to set up a Firebird login.',
-            335544472,
-            '28000',
-          );
-        }
-        throw new FirebirdProtocolError(`Unexpected op ${op} during Legacy_Auth continuation`);
-      }
+      await drainLegacyResponse(wire);
     } else {
       // op_accept_data: the token rides in the attach DPB.
       dpbAuthData = legacyToken;
@@ -214,7 +225,7 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
   } else if (!accept.isAuthenticated || accept.op === Op.cond_accept) {
     // op_cond_accept with no data: server wants continuation rounds now.
     let rounds = 0;
-    while (serverData.length === 0 && accept.op === Op.cond_accept) {
+    while (serverData.length === 0 && accept.op === Op.cond_accept && activePlugin !== 'Legacy_Auth') {
       if (++rounds > 4) throw new FirebirdAuthError('SRP negotiation did not converge');
       sendContAuth(wire, ephemeral.publicHex, activePlugin);
       const op = await wire.readOp();
@@ -230,7 +241,21 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
       if (nextPlugin) activePlugin = nextPlugin;
     }
 
-    if (serverData.length > 0) {
+    /** Set once the fallback token is sent; also rides into pendingAuth. */
+    let fallbackToken: string | undefined;
+
+    if (activePlugin === 'Legacy_Auth') {
+      // Server steered straight to Legacy_Auth (picked it at accept, or
+      // switched during the restart rounds) — e.g. the account only exists in
+      // the legacy security database. One-shot: send the DES token.
+      fallbackToken = legacyHash(opts.password);
+      if (accept.op === Op.cond_accept) {
+        sendContAuth(wire, fallbackToken, 'Legacy_Auth', 'Legacy_Auth');
+        await drainLegacyResponse(wire);
+      } else {
+        dpbAuthData = fallbackToken; // op_accept_data path: token rides in the DPB
+      }
+    } else if (serverData.length > 0) {
       if (!activePlugin.startsWith('Srp')) {
         throw new FirebirdAuthError(`Server requested unsupported auth plugin '${activePlugin}'`);
       }
@@ -257,19 +282,33 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
             await wire.readString(); // plugin list
             const nextKeys = await wire.readString();
             if (nextKeys) keys = nextKeys;
-            if (data.length === 0) continue; // server proof (M2) — ignore
-            if (attempted.has(nextPlugin)) {
-              throw new FirebirdAuthError(
-                'Your user name and password are not defined. Ask your database administrator to set up a Firebird login.',
-                335544472,
-                '28000',
-              );
+            // Legacy_Auth is one-shot: any re-offer after the token = rejected.
+            if (fallbackToken !== undefined) throw LOGIN_ERROR();
+            if (data.length === 0 && nextPlugin === activePlugin) continue; // server proof (M2) — ignore
+            if (attempted.has(nextPlugin)) throw LOGIN_ERROR();
+            attempted.add(nextPlugin);
+            if (nextPlugin === 'Legacy_Auth') {
+              // The SRP proof was rejected but the server offers Legacy_Auth —
+              // typically the SRP verifier holds a stale password (gsec only
+              // updates the legacy security db) while the legacy one matches.
+              // Follow the switch like fbclient does. No SRP key was ever
+              // confirmed, so wire encryption is off the table.
+              activePlugin = 'Legacy_Auth';
+              sessionKey = null;
+              fallbackToken = legacyHash(opts.password);
+              sendContAuth(wire, fallbackToken, 'Legacy_Auth', 'Legacy_Auth');
+              continue;
             }
             if (!nextPlugin.startsWith('Srp')) {
               throw new FirebirdAuthError(`Server switched to unsupported auth plugin '${nextPlugin}'`);
             }
             activePlugin = nextPlugin;
-            attempted.add(activePlugin);
+            if (data.length === 0) {
+              // Plugin switch without server data: re-offer our public key,
+              // the salt+key for the new plugin follow in the next round.
+              sendContAuth(wire, ephemeral.publicHex, activePlugin);
+              continue;
+            }
             const next = parseServerAuthData(data);
             const p2 = computeProof(activePlugin, opts.user, opts.password, next.salt, ephemeral, next.serverKeyHex);
             sessionKey = p2.sessionKey;
@@ -285,7 +324,7 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
     // Attach-time continuation stays available in every path: the server can
     // still answer op_attach with op_cont_auth (FB3 crypt-off, or a plugin
     // switch after a DPB-carried proof).
-    pendingAuth = { ephemeral, plugin: activePlugin, user: opts.user, password: opts.password };
+    pendingAuth = { ephemeral, plugin: activePlugin, user: opts.user, password: opts.password, legacyToken: fallbackToken };
   }
 
   // Wire encryption.
@@ -333,7 +372,11 @@ export async function performHandshake(wire: WireConnection, opts: HandshakeOpti
     }
   }
   if (!encrypted && opts.wireCrypt === WireCryptLevel.required) {
-    throw new FirebirdAuthError('wireCrypt=required but wire encryption could not be established');
+    throw new FirebirdAuthError(
+      pendingAuth?.plugin === 'Legacy_Auth'
+        ? 'wireCrypt=required but the server authenticated via Legacy_Auth, which yields no session key for wire encryption'
+        : 'wireCrypt=required but wire encryption could not be established',
+    );
   }
 
   return {
@@ -401,6 +444,7 @@ export async function readResponseWithAuth(
   wire: WireConnection,
   pending: PendingAuth | null,
 ): Promise<import('./wire.js').GenericResponse> {
+  let legacySent = false;
   for (;;) {
     const op = await wire.readOp();
     if (op === Op.response) return wire.parseResponseBody();
@@ -410,8 +454,14 @@ export async function readResponseWithAuth(
       await wire.readString(); // plugin list
       await wire.readString(); // keys
       const usePlugin = nextPlugin || pending.plugin;
-      if (pending.legacyToken) {
-        // Legacy_Auth is one-shot; resend the DES token if asked again.
+      if (usePlugin === 'Legacy_Auth' || pending.legacyToken) {
+        // Legacy_Auth (chosen up front, or a server switch after a
+        // DPB-carried SRP proof). One-shot: a re-offer after the token
+        // means the legacy credentials were rejected.
+        if (legacySent) throw LOGIN_ERROR();
+        legacySent = true;
+        pending.plugin = 'Legacy_Auth';
+        pending.legacyToken ??= legacyHash(pending.password);
         sendContAuth(wire, pending.legacyToken, 'Legacy_Auth', 'Legacy_Auth');
         continue;
       }
