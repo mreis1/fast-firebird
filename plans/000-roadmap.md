@@ -153,21 +153,26 @@ only when API surface stabilizes (avoid premature package fragmentation).
    decode to UTC-instant JS `Date`s (instant exact, zone id dropped; verified:
    09:30 America/New_York → 13:30Z). Apps that must round-trip the *zone*
    need a `{date, zone}` value or Temporal ZonedDateTime once stable in Node.
-3. **Blob write streaming** — `Writable`/AsyncIterable input for blob params
+3. **Cross-blob pipelining** — per-segment pipelining shipped (32-deep window);
+   the next WAN win is overlapping blob open/read/close ACROSS rows on one
+   connection. Field data (2026-07-11): 100×1.7 MB fetch runs at 10 MB/s on a
+   44 MB/s path — the gap is ~2–3 RTTs of per-blob open/close/drain that could
+   overlap with the previous blob's transfer.
+4. **Blob write streaming** — `Writable`/AsyncIterable input for blob params
    (reads already stream via `Blob.stream()`).
-4. **core `autoUpgradeReadOnly`** — opt-in RO→RW transaction auto-upgrade with
+5. **core `autoUpgradeReadOnly`** — opt-in RO→RW transaction auto-upgrade with
    statement replay in core's own API (the nf2-ext compat layer already does
    this at its level).
-5. **Drizzle depth**: nested transactions (savepoints — adapter currently
+6. **Drizzle depth**: nested transactions (savepoints — adapter currently
    throws), relational query API, drizzle-kit migrations, RDB$ introspection →
    schema generation.
-6. **Services actions**: backup/restore (gbak) via service start+output —
+7. **Services actions**: backup/restore (gbak) via service start+output —
    plumbing (SPB, collectOutput) already exists.
-7. **DECFLOAT special values** — Inf/NaN decode; encode rejects them (finite
+8. **DECFLOAT special values** — Inf/NaN decode; encode rejects them (finite
    round-trip complete).
-8. **Protocol 10–12 / FB 2.5 legacy support** — EOL upstream; only if a
+9. **Protocol 10–12 / FB 2.5 legacy support** — EOL upstream; only if a
    migration demands it.
-9. **Native/WASM acceleration** (SIMD UTF-8, decimal128) — only if benchmarks
+10. **Native/WASM acceleration** (SIMD UTF-8, decimal128) — only if benchmarks
    prove the need (`plans/architecture.md`).
 
 ## Testing strategy
