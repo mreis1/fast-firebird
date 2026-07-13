@@ -9,7 +9,7 @@ import {
   type PreparedStatementInfo,
 } from '../protocol/statement.js';
 import { nextFetchCount } from '../protocol/fetch-plan.js';
-import { readBlobs, writeBlob } from '../protocol/blob.js';
+import { readBlobs, writeBlob, writeBlobStream } from '../protocol/blob.js';
 import { BlobRef, DecFloatVal, makeColumnReader, type ParamValue } from '../protocol/msgcodec.js';
 import { encodeDecFloat } from '../types/decfloat.js';
 import { resolveTextCodec, type TextCodec, type TextCodecOptions } from '../charset/decoder.js';
@@ -408,6 +408,11 @@ export async function executePrepared(
   return { rows: rows.map((r) => mapper.shape(r)), rowsAffected, columns: mapper.columns };
 }
 
+/** A streaming BLOB parameter source (Readable, async generator, …). */
+function isBlobStreamSource(v: unknown): v is AsyncIterable<Buffer | string> {
+  return typeof v === 'object' && v !== null && typeof (v as AsyncIterable<unknown>)[Symbol.asyncIterator] === 'function';
+}
+
 /** Validate arity, upload blob params, and build the text encoder. */
 async function prepareParams(
   ctx: SessionContext,
@@ -428,6 +433,19 @@ async function prepareParams(
     if (v != null && d.type === SqlType.BLOB && (typeof v === 'string' || Buffer.isBuffer(v))) {
       const bytes = typeof v === 'string' ? codecForDesc(d, opts, 'blob').encode(v) : v;
       const id = await writeBlob(wire, txHandle, bytes, opts.blobWriteChunkSize);
+      prepared[i] = new BlobRef(id, d.subType);
+    } else if (v instanceof Blob) {
+      // Reading a lazy handle here would re-enter this connection's op-lock
+      // (already held) and deadlock — make the materialization explicit.
+      throw new FirebirdError(
+        `Parameter ${i + 1}: a lazy Blob handle cannot be bound directly — pass \`await blob.buffer()\` instead`,
+      );
+    } else if (v != null && isBlobStreamSource(v)) {
+      if (d.type !== SqlType.BLOB) {
+        throw new FirebirdError(`Parameter ${i + 1}: streaming sources are only valid for BLOB columns`);
+      }
+      const codec = codecForDesc(d, opts, 'blob');
+      const id = await writeBlobStream(wire, txHandle, v, opts.blobWriteChunkSize, (s) => codec.encode(s));
       prepared[i] = new BlobRef(id, d.subType);
     } else if (v != null && (d.type === SqlType.DEC16 || d.type === SqlType.DEC34) && (typeof v === 'string' || typeof v === 'number' || typeof v === 'bigint')) {
       // Native DECFLOAT encoding: a JS number would otherwise be sent as a

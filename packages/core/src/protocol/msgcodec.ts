@@ -276,7 +276,10 @@ export type ParamValue =
   | Date
   | Buffer
   | BlobRef
-  | DecFloatVal;
+  | DecFloatVal
+  // Streaming BLOB source (fs.createReadStream, async generators, …):
+  // uploaded segment-by-segment without buffering the whole value.
+  | AsyncIterable<Buffer | string>;
 
 const INT32_MIN = -2_147_483_648;
 const INT32_MAX = 2_147_483_647;

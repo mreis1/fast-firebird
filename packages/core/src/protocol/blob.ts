@@ -1,4 +1,5 @@
 import { BLOB_SEGSTR_EOF_HANDLE, MAX_SEGMENT_SIZE, Op } from './constants.js';
+import { FirebirdError } from '../api/errors.js';
 import type { WireConnection } from './wire.js';
 
 /**
@@ -326,6 +327,96 @@ export async function readBlobs(
     throw err;
   }
   return blobs.map((b) => Buffer.concat(b.parts));
+}
+
+/**
+ * Create a blob and stream `source` into it without ever materializing the
+ * whole value: chunks are re-framed into wire-max segments (an accumulator
+ * merges small chunks, big chunks are sliced) and uploaded with the same
+ * PIPELINE_DEPTH op_batch_segments window as `writeBlob`. String chunks go
+ * through `encodeText` (the column's charset codec). Returns the blob id.
+ *
+ * On any error — source or wire — in-flight responses are drained and the
+ * abandoned blob handle is released, so the connection stays usable.
+ */
+export async function writeBlobStream(
+  wire: WireConnection,
+  txHandle: number,
+  source: AsyncIterable<Buffer | string>,
+  chunkSize: number,
+  encodeText: (s: string) => Buffer,
+): Promise<Buffer> {
+  wire.writer.int32(Op.create_blob2).uint32(0).int32(txHandle).int32(0).int32(0);
+  wire.flush();
+  const created = await wire.readResponse();
+  const blobHandle = created.handle;
+  const blobId = created.oid;
+
+  const segSize = Math.min(Math.max(chunkSize, 1), MAX_SEGMENT_SIZE - 2);
+  let inFlight = 0; // unconsumed responses on the wire (segments + close)
+  let closeSent = false;
+
+  const sendSegment = async (chunk: Buffer): Promise<void> => {
+    const framed = Buffer.allocUnsafe(chunk.length + 2);
+    framed.writeUInt16LE(chunk.length, 0);
+    chunk.copy(framed, 2);
+    wire.writer.int32(Op.batch_segments).int32(blobHandle).int32(framed.length).opaque(framed);
+    inFlight++;
+    if (inFlight >= PIPELINE_DEPTH) {
+      wire.flush();
+      inFlight--; // the await consumes this response even when it throws
+      await wire.readResponse(); // oldest in-flight segment
+    }
+  };
+
+  try {
+    // Accumulate arbitrary chunk sizes into full wire segments.
+    let pending: Buffer[] = [];
+    let pendingBytes = 0;
+    for await (const raw of source) {
+      const buf = typeof raw === 'string' ? encodeText(raw) : raw;
+      if (!Buffer.isBuffer(buf)) {
+        throw new FirebirdError('Streaming blob source must yield Buffers or strings');
+      }
+      if (buf.length === 0) continue;
+      pending.push(buf);
+      pendingBytes += buf.length;
+      while (pendingBytes >= segSize) {
+        const all = pending.length === 1 ? pending[0]! : Buffer.concat(pending, pendingBytes);
+        await sendSegment(all.subarray(0, segSize));
+        const rest = all.subarray(segSize);
+        pending = rest.length > 0 ? [rest] : [];
+        pendingBytes = rest.length;
+      }
+    }
+    if (pendingBytes > 0) {
+      await sendSegment(pending.length === 1 ? pending[0]! : Buffer.concat(pending, pendingBytes));
+    }
+    wire.writer.int32(Op.close_blob).int32(blobHandle);
+    closeSent = true;
+    inFlight++;
+    wire.flush();
+    while (inFlight > 0) {
+      inFlight--;
+      await wire.readResponse();
+    }
+  } catch (err) {
+    // The SOURCE can throw between writes, leaving segments written but not
+    // yet flushed — send them now so every counted in-flight op actually has
+    // a response to drain (otherwise the drain below hangs forever).
+    try {
+      wire.flush();
+    } catch {
+      /* transport dead — drain reads will fail fast below */
+    }
+    while (inFlight > 0) {
+      inFlight--;
+      await wire.readResponse().catch(() => undefined);
+    }
+    if (!closeSent) closeBlobDeferred(wire, blobHandle);
+    throw err;
+  }
+  return blobId;
 }
 
 /**

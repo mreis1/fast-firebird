@@ -88,7 +88,8 @@ only when API surface stabilizes (avoid premature package fragmentation).
       cache. Fixed a capacity-overshoot race (reserve slot before async validate).
 - [x] Segmented blob read/write with configurable chunk sizes (done in M2)
 - [x] Blob *read* streaming (`Blob.stream()`, chunk-level Readable — M5.5)
-- [ ] Blob *write* streaming (Writable; writes are still buffered per value) — backlog
+- [x] Blob *write* streaming — Readable/AsyncIterable sources bound directly
+      as BLOB params (shipped 2026-07-13, see backlog #6)
 
 ### M5 — Events, services, scripts ✅ (2026-07-09)
 - [x] Script parser (isql-faithful: SET TERM, PSQL bodies, comments, string/
@@ -190,8 +191,13 @@ only when API surface stabilizes (avoid premature package fragmentation).
    re-transfer — RT-asserted), widening heads read only the delta, full
    consumption promotes to the cache, `blob.close()` releases an unfinished
    cursor. Composes with blobReadAhead (prefetched heads are free).
-6. **Blob write streaming** — `Writable`/AsyncIterable input for blob params
-   (reads already stream via `Blob.stream()`).
+~~6. Blob write streaming~~ — SHIPPED 2026-07-13: `Readable`/
+   `AsyncIterable<Buffer|string>` bound directly as BLOB params
+   (`writeBlobStream`: accumulator re-frames arbitrary chunks into wire-max
+   segments, PIPELINE_DEPTH upload window, string chunks via column codec;
+   source-throw drains cleanly incl. unflushed segments). Lazy `Blob` handles
+   are rejected as params with guidance (same-connection deadlock guard —
+   `await blob.buffer()` first).
 7. **core `autoUpgradeReadOnly`** — opt-in RO→RW transaction auto-upgrade with
    statement replay in core's own API (the nf2-ext compat layer already does
    this at its level).
