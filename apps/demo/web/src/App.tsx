@@ -42,6 +42,9 @@ export function App() {
   };
   const isOffline = offline.has(active);
   const activeLabel = servers.find((s) => s.id === active)?.label ?? active;
+  /** Offline-card settings editor visibility (per active server). */
+  const [editingOffline, setEditingOffline] = useState(false);
+  useEffect(() => setEditingOffline(false), [active]);
   /** Bumped when a server's handshake config changes — remounts panels so they reconnect. */
   const [nonce, setNonce] = useState(0);
   const updateConfig = async (patch: { wireCompression?: boolean; charset?: string; charsetNoneEncoding?: string }) => {
@@ -110,7 +113,23 @@ export function App() {
           <div className="note" style={{ marginTop: 0, marginBottom: 12 }}>
             disconnected — pools and attachments for “{activeLabel}” are closed on the server.
           </div>
-          <button className="btn" onClick={() => reconnect(active)}>Connect</button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn" onClick={() => reconnect(active)}>Connect</button>
+            <button className="btn ghost" onClick={() => setEditingOffline((v) => !v)}>
+              {editingOffline ? 'close editor' : 'edit settings'}
+            </button>
+          </div>
+          {editingOffline && (
+            <EditServer
+              key={active}
+              cfg={servers.find((s) => s.id === active)!}
+              onSave={async (patch) => {
+                const { server } = await api.updateServer(active, patch);
+                setServers((prev) => prev.map((s) => (s.id === server.id ? server : s)));
+                setEditingOffline(false);
+              }}
+            />
+          )}
         </div>
       ) : (
         <div className="grid">
@@ -216,6 +235,73 @@ function AddServer({ onAdd }: { onAdd: (cfg: any) => void }) {
         Read/write, wide open — points at whatever database you give it. Compression needs the server to allow it
         (<code>WireCompression = true</code> in firebird.conf). CHARSET NONE + a transcoder is the legacy-database
         mode: raw bytes decoded client-side (win1252 covers €, smart quotes, em dashes).
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Offline settings editor: everything is a connect-time setting here, applied
+ * on the next Connect. Endpoint identity (host/port/db/credentials) is fixed
+ * for built-in servers — they map to the docker matrix.
+ */
+function EditServer({ cfg, onSave }: { cfg: ServerCfg; onSave: (patch: any) => void }) {
+  const [f, setF] = useState({ label: cfg.label, host: cfg.host, port: String(cfg.port), database: cfg.database, user: cfg.user, password: '' });
+  const [cs, setCs] = useState({ charset: cfg.charset ?? 'NONE', enc: cfg.charsetNoneEncoding ?? 'win1252' });
+  const [role, setRole] = useState(cfg.role ?? '');
+  const [zlib, setZlib] = useState(!!cfg.wireCompression);
+  const [err, setErr] = useState<string | null>(null);
+  const set = (k: string) => (e: any) => setF({ ...f, [k]: e.target.value });
+  const locked = !!cfg.builtin;
+  const lockTitle = locked ? 'Fixed for built-in servers (docker matrix)' : undefined;
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div className="row">
+        <input style={{ maxWidth: 130 }} placeholder="label" value={f.label} onChange={set('label')} />
+        <input style={{ maxWidth: 150 }} placeholder="host" value={f.host} onChange={set('host')} disabled={locked} title={lockTitle} />
+        <input style={{ maxWidth: 90 }} placeholder="port" value={f.port} onChange={set('port')} disabled={locked} title={lockTitle} />
+        <input style={{ flex: 1, minWidth: 200 }} placeholder="/path/to/db.fdb" value={f.database} onChange={set('database')} disabled={locked} title={lockTitle} />
+        <input style={{ maxWidth: 110 }} placeholder="user" value={f.user} onChange={set('user')} disabled={locked} title={lockTitle} />
+        <input style={{ maxWidth: 150 }} placeholder="password (unchanged)" type="password" value={f.password} onChange={set('password')} disabled={locked} title={lockTitle ?? 'Leave empty to keep the current password'} />
+        <CharsetPicker charset={cs.charset} noneEncoding={cs.enc} onChange={(charset, enc) => setCs({ charset, enc })} />
+        <input style={{ maxWidth: 110 }} placeholder="role (optional)" value={role} onChange={(e) => setRole(e.target.value)} title="SQL role sent at attach (DPB), e.g. RDB$ADMIN" />
+        <label className="unit" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+          <input type="checkbox" style={{ width: 'auto' }} checked={zlib} onChange={(e) => setZlib(e.target.checked)} />
+          zlib compression
+        </label>
+        <button
+          className="btn"
+          onClick={async () => {
+            setErr(null);
+            try {
+              await onSave({
+                label: f.label,
+                charset: cs.charset,
+                charsetNoneEncoding: cs.enc,
+                role: role.trim(),
+                wireCompression: zlib,
+                ...(locked
+                  ? {}
+                  : {
+                      host: f.host,
+                      port: Number(f.port),
+                      database: f.database,
+                      user: f.user,
+                      ...(f.password ? { password: f.password } : {}),
+                    }),
+              });
+            } catch (e: any) {
+              setErr(String(e?.message || e));
+            }
+          }}
+        >
+          Save
+        </button>
+      </div>
+      {err && <div className="err-text">{err}</div>}
+      <div className="note">
+        Saved settings apply on the next Connect.
+        {locked && ' Built-in server: endpoint & credentials are pinned; label, charset, role and compression are editable.'}
       </div>
     </div>
   );

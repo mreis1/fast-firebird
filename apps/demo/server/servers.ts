@@ -93,7 +93,7 @@ export function connectOptsFor(config: ServerConfig) {
  * Patch a server's config (e.g. toggle wire compression) and tear down its
  * live state — handshake-time settings only apply on the next connect.
  */
-export async function updateServerConfig(id: string, patch: Partial<Pick<ServerConfig, 'wireCompression' | 'label' | 'charset' | 'charsetNoneEncoding' | 'role'>>): Promise<ServerConfig> {
+export async function updateServerConfig(id: string, patch: Partial<Omit<ServerConfig, 'id' | 'version'>>): Promise<ServerConfig> {
   const config = configs.get(id);
   if (!config) throw new Error(`Unknown server '${id}'`);
   Object.assign(config, patch);

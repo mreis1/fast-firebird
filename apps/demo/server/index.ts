@@ -51,17 +51,29 @@ app.delete('/api/servers/:id', async (req, reply) => {
   }
 });
 
-// Patch connect-time settings (wire compression, charset/transcoder); they
-// apply on the next connect, so the server state is torn down.
+// Patch connection settings; they apply on the next connect, so the server
+// state is torn down. Endpoint identity (host/port/db/credentials) is only
+// editable on custom servers — built-ins are pinned to the docker matrix.
 app.post('/api/servers/:id/config', async (req, reply) => {
   const { id } = req.params as { id: string };
-  const { wireCompression, charset, charsetNoneEncoding, role } = req.body as { wireCompression?: boolean; charset?: string; charsetNoneEncoding?: string; role?: string };
+  const body = req.body as { wireCompression?: boolean; charset?: string; charsetNoneEncoding?: string; role?: string; label?: string; host?: string; port?: number | string; database?: string; user?: string; password?: string };
   try {
     const patch: Record<string, unknown> = {};
-    if (wireCompression !== undefined) patch.wireCompression = !!wireCompression;
-    if (charset !== undefined) patch.charset = String(charset).toUpperCase();
-    if (charsetNoneEncoding !== undefined) patch.charsetNoneEncoding = String(charsetNoneEncoding);
-    if (role !== undefined) patch.role = String(role).trim();
+    if (body.wireCompression !== undefined) patch.wireCompression = !!body.wireCompression;
+    if (body.charset !== undefined) patch.charset = String(body.charset).toUpperCase();
+    if (body.charsetNoneEncoding !== undefined) patch.charsetNoneEncoding = String(body.charsetNoneEncoding);
+    if (body.role !== undefined) patch.role = String(body.role).trim();
+    if (body.label !== undefined && String(body.label).trim()) patch.label = String(body.label).trim();
+    const identity: Record<string, unknown> = {};
+    if (body.host !== undefined && String(body.host).trim()) identity.host = String(body.host).trim();
+    if (body.port !== undefined && Number(body.port) > 0) identity.port = Number(body.port);
+    if (body.database !== undefined && String(body.database).trim()) identity.database = String(body.database).trim();
+    if (body.user !== undefined && String(body.user).trim()) identity.user = String(body.user).trim();
+    if (body.password !== undefined && body.password !== '') identity.password = String(body.password); // empty = unchanged
+    if (Object.keys(identity).length > 0) {
+      if (isBuiltinServer(id)) throw new Error('host/port/database/credentials of built-in servers are fixed (docker matrix)');
+      Object.assign(patch, identity);
+    }
     const cfg = await updateServerConfig(id, patch);
     return { server: publicConfig(cfg) };
   } catch (err) {
