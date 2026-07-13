@@ -3,6 +3,12 @@ import { WireCryptLevel } from '../protocol/constants.js';
 
 export type WireCryptOption = 'enabled' | 'disabled' | 'required';
 
+/**
+ * Blob fetch mode: which blob columns come back as lazy `Blob` handles vs
+ * eagerly materialized values (text → string a.k.a. memo, binary → Buffer).
+ */
+export type BlobMode = 'eager' | 'lazy' | 'lazy-binary' | 'lazy-text';
+
 export interface FirebirdConnectionOptions {
   host?: string;
   port?: number;
@@ -29,8 +35,16 @@ export interface FirebirdConnectionOptions {
   authPlugin?: 'Srp256' | 'Srp' | 'Legacy_Auth' | 'auto';
 
   blobAsText?: boolean;
-  /** Default blob handling: 'eager' (materialize, default) or 'lazy' (handles). */
-  blobs?: 'eager' | 'lazy';
+  /**
+   * Default blob handling.
+   * - 'eager' (default): materialize during decode — text blobs (memos)
+   *   arrive as strings, binary blobs as Buffers.
+   * - 'lazy': every blob column becomes a `Blob` handle.
+   * - 'lazy-binary': binary blobs lazy, text blobs (memos) eager — the
+   *   file-export sweet spot.
+   * - 'lazy-text': text blobs lazy, binary blobs eager.
+   */
+  blobs?: BlobMode;
   blobWriteChunkSize?: number;
   blobReadChunkSize?: number;
   /** Rows requested per fetch round trip. */
@@ -76,7 +90,7 @@ export interface ResolvedOptions {
   wireCryptPlugin: string | undefined;
   authPlugin: string | undefined;
   blobAsText: boolean;
-  blobs: 'eager' | 'lazy';
+  blobs: BlobMode;
   blobWriteChunkSize: number;
   blobReadChunkSize: number;
   fetchSize: number;

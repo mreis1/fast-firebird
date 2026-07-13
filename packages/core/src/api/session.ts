@@ -19,7 +19,7 @@ import { Blob, type BlobScope } from './blob.js';
 import { FirebirdError } from './errors.js';
 import type { SqlVarDesc } from '../protocol/info.js';
 import type { WireConnection } from '../protocol/wire.js';
-import type { ResolvedOptions } from './options.js';
+import type { BlobMode, ResolvedOptions } from './options.js';
 
 export type Row = Record<string, unknown>;
 
@@ -54,8 +54,12 @@ export interface QueryResult {
 
 /** Per-statement options. */
 export interface QueryOptions {
-  /** 'eager' (default) materializes blobs; 'lazy' returns Blob handles. */
-  blobs?: 'eager' | 'lazy';
+  /**
+   * Blob handling override for this statement: 'eager' (default)
+   * materializes; 'lazy' returns Blob handles; 'lazy-binary' / 'lazy-text'
+   * lazify only that subtype (the other stays eager).
+   */
+  blobs?: BlobMode;
   /** Column names (alias/field, case-insensitive) to omit from rows. */
   exclude?: string[];
   /** If set, keep ONLY these columns (applied before `exclude`). */
@@ -185,7 +189,8 @@ function sqlTypeName(d: SqlVarDesc): string {
  */
 class RowMapper {
   private readonly keys: (string | null)[]; // null = column dropped
-  private readonly lazy: boolean;
+  /** Per column: true when a blob column is returned as a lazy handle. */
+  private readonly lazyCol: boolean[];
   private readonly arrayMode: boolean;
   private readonly scope: BlobScope | null;
   /** Per column: text codec for a subtype-1 (text) blob, else null. */
@@ -203,10 +208,15 @@ class RowMapper {
     const lc = ctx.opts.lowercaseKeys;
     const only = run.query.only?.map((s) => s.toLowerCase());
     const exclude = new Set(run.query.exclude?.map((s) => s.toLowerCase()) ?? []);
-    this.lazy = (run.query.blobs ?? ctx.opts.blobs) === 'lazy';
+    const mode: BlobMode = run.query.blobs ?? ctx.opts.blobs;
+    // Subtype 1 = text (memo); everything else counts as binary.
+    const lazyFor = (subType: number): boolean =>
+      mode === 'lazy' || (mode === 'lazy-binary' && subType !== 1) || (mode === 'lazy-text' && subType === 1);
     this.arrayMode = run.query.rowMode === 'array';
     this.blobCodec = [];
+    this.lazyCol = [];
     let keptEagerBlobs = false;
+    let keptLazyBlobs = false;
 
     this.keys = outputs.map((d, i) => {
       const rawName = d.alias || d.field || `F${i + 1}`;
@@ -217,8 +227,13 @@ class RowMapper {
       const excluded = exclude.has(lower) || (qual !== null && exclude.has(qual));
       // Array mode keeps every column positionally (exclude/only ignored).
       const kept = this.arrayMode || ((!only || listed(only)) && !excluded);
-      this.blobCodec[i] = isBlobType(d.type) && d.subType === 1 ? codecForDesc(d, ctx.opts, 'blob') : null;
-      if (kept && isBlobType(d.type) && !this.lazy) keptEagerBlobs = true;
+      const isBlob = isBlobType(d.type);
+      this.blobCodec[i] = isBlob && d.subType === 1 ? codecForDesc(d, ctx.opts, 'blob') : null;
+      this.lazyCol[i] = isBlob && lazyFor(d.subType);
+      if (kept && isBlob) {
+        if (this.lazyCol[i]) keptLazyBlobs = true;
+        else keptEagerBlobs = true;
+      }
       return kept ? (lc ? lower : rawName) : null;
     });
     this.hasKeptEagerBlobs = keptEagerBlobs;
@@ -231,23 +246,22 @@ class RowMapper {
       this.columns.push({ name: key, field: d.field, relation: d.relation, type: sqlTypeName(d), nullable: d.nullable });
     }
 
-    this.scope =
-      this.lazy && outputs.some((d, i) => isBlobType(d.type) && this.keys[i] !== null)
-        ? {
-            wire: ctx.wire,
-            lock: ctx.lock,
-            txHandle,
-            chunkSize: ctx.opts.blobReadChunkSize,
-            isAlive: run.txAlive,
-          }
-        : null;
+    this.scope = keptLazyBlobs
+      ? {
+          wire: ctx.wire,
+          lock: ctx.lock,
+          txHandle,
+          chunkSize: ctx.opts.blobReadChunkSize,
+          isAlive: run.txAlive,
+        }
+      : null;
   }
 
-  /** Eagerly materialize kept blob cells (call while holding the op-lock). */
+  /** Eagerly materialize kept eager blob cells (call while holding the op-lock). */
   async materialize(row: unknown[]): Promise<void> {
-    if (this.lazy || !this.hasKeptEagerBlobs) return;
+    if (!this.hasKeptEagerBlobs) return;
     for (let i = 0; i < row.length; i++) {
-      if (this.keys[i] === null) continue; // dropped → never fetch
+      if (this.keys[i] === null || this.lazyCol[i]) continue; // dropped/lazy → not now
       const cell = row[i];
       if (cell instanceof BlobRef) {
         const data = await readBlob(this.ctx.wire, this.txHandle, cell.id, this.ctx.opts.blobReadChunkSize);

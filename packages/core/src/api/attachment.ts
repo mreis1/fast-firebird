@@ -177,9 +177,9 @@ export class Attachment {
 
   /** Run a single statement in its own transaction; returns rows + count. */
   async run(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<QueryResult> {
-    if ((options?.blobs ?? this.options.blobs) === 'lazy') {
+    if ((options?.blobs ?? this.options.blobs) !== 'eager') {
       throw new FirebirdBlobError(
-        "lazy blobs require an explicit transaction or a stream — use db.transaction(tx => tx.query(…, {blobs:'lazy'})) or db.queryStream(…, {blobs:'lazy'})",
+        "lazy blob modes ('lazy', 'lazy-binary', 'lazy-text') require an explicit transaction or a stream — use db.transaction(tx => tx.query(…, {blobs:…})) or db.queryStream(…, {blobs:…}), or override with {blobs:'eager'}",
       );
     }
     const tx = await this.startTransaction();

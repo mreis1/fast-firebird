@@ -152,8 +152,10 @@ only when API surface stabilizes (avoid premature package fragmentation).
   would also break every existing consumer (compat shim, drizzle, demo) and
   make `db.query` vs `tx.query` return different shapes. Lazy stays one option
   away: `connect({blobs:'lazy'})` connection-wide, or `{blobs:'lazy'}`
-  per query/stream (auto-tx `db.query` rejects lazy by design — handles would
-  die with the hidden transaction).
+  per query/stream (auto-tx `db.query` rejects all lazy modes by design —
+  handles would die with the hidden transaction). Subtype shorthands since
+  2026-07-13: `'lazy-binary'` (files lazy, memos as strings — the export
+  sweet spot) and `'lazy-text'` (inverse).
 
 ## Deferred backlog (explicitly parked, in rough priority order)
 
@@ -175,8 +177,9 @@ only when API surface stabilizes (avoid premature package fragmentation).
    Companion: FB 5.0.2+ protocol-level inline blobs (`op_inline_blob` — small
    blobs ride with the row, zero extra RTs) would make small blobs free on FB5.
 4. **Per-column blob mode** — `blobs: {default:'eager', lazy:['BLOB1']}` (and
-   the inverse): memo columns eager, file columns lazy in one query. RowMapper
-   is already per-column; small change.
+   the inverse): name specific columns. The subtype shorthand shipped
+   2026-07-13 (`'lazy-binary'` / `'lazy-text'` — RowMapper decides per column
+   by blob subtype); only the named-column form remains here.
 5. **Blob head/resume cursor** — `blob.head(n)` for magic-number sniffing that
    KEEPS the handle open at its position, so a later `.stream()`/`.buffer()`
    resumes instead of re-transferring (segmented blobs are forward-only; a kept

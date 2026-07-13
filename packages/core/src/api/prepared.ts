@@ -46,9 +46,9 @@ export class PreparedStatement {
         }),
       );
     }
-    if ((options?.blobs ?? this.att.options.blobs) === 'lazy') {
+    if ((options?.blobs ?? this.att.options.blobs) !== 'eager') {
       throw new FirebirdBlobError(
-        "lazy blobs require an explicit transaction — pass a tx to stmt.run(params, tx, {blobs:'lazy'})",
+        "lazy blob modes require an explicit transaction — pass a tx to stmt.run(params, tx, {blobs:'lazy'})",
       );
     }
     const own = await this.att.startTransaction();

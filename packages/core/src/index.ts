@@ -14,7 +14,7 @@ export type { QueryResult, Row, QueryOptions, ColumnInfo } from './api/session.j
 export { Blob } from './api/blob.js';
 export type { TransactionOptions, IsolationLevel } from './protocol/transaction.js';
 export type { ParamValue } from './protocol/msgcodec.js';
-export type { FirebirdConnectionOptions, LegacyOptionAliases, WireCryptOption } from './api/options.js';
+export type { FirebirdConnectionOptions, LegacyOptionAliases, WireCryptOption, BlobMode } from './api/options.js';
 export {
   FirebirdError,
   FirebirdAuthError,
