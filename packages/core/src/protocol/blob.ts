@@ -76,10 +76,12 @@ export async function blobTotalLength(wire: WireConnection, blobHandle: number):
  */
 const PIPELINE_DEPTH = 32;
 
-/** Parse one op_get_segment response body (segments framed UInt16LE len + bytes). */
-async function readSegmentResponse(wire: WireConnection): Promise<{ data: Buffer; eof: boolean }> {
-  const resp = await wire.readResponse();
-  const raw = resp.data;
+/**
+ * Unpack a UInt16LE-framed segment stream (`len(2) + bytes` repeated) into
+ * one contiguous Buffer. Used for op_get_segment response bodies and the
+ * payload of op_inline_blob packets (identical framing).
+ */
+export function parseSegmentFrames(raw: Buffer): Buffer {
   const parts: Buffer[] = [];
   let pos = 0;
   while (pos + 2 <= raw.length) {
@@ -88,8 +90,14 @@ async function readSegmentResponse(wire: WireConnection): Promise<{ data: Buffer
     parts.push(Buffer.from(raw.subarray(pos, pos + len)));
     pos += len;
   }
+  return parts.length === 1 ? parts[0]! : Buffer.concat(parts);
+}
+
+/** Parse one op_get_segment response body (segments framed UInt16LE len + bytes). */
+async function readSegmentResponse(wire: WireConnection): Promise<{ data: Buffer; eof: boolean }> {
+  const resp = await wire.readResponse();
   return {
-    data: parts.length === 1 ? parts[0]! : Buffer.concat(parts),
+    data: parseSegmentFrames(resp.data),
     eof: resp.handle === BLOB_SEGSTR_EOF_HANDLE,
   };
 }

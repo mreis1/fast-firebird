@@ -114,7 +114,7 @@ export async function executeStatement(
   }
   if (wire.protocolVersion >= 16) w.int32(0); // p_sqldata_timeout
   if (wire.protocolVersion >= 18) w.int32(0); // p_sqldata_cursor_flags
-  if (wire.protocolVersion >= 19) w.int32(0); // p_sqldata_inline_blob_size
+  if (wire.protocolVersion >= 19) w.int32(wire.inlineBlobSize); // p_sqldata_inline_blob_size
 
   const pendingFetch = !useExecute2 && piggyback.fetchSize !== undefined;
   if (pendingFetch) writeFetchRequest(wire, stmt, piggyback.fetchSize);

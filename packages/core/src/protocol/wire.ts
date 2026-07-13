@@ -39,6 +39,17 @@ export class WireConnection {
   flushCount = 0;
   /** Deferred (lazy-send) operations whose responses are pending, FIFO. */
   private deferredResponses = 0;
+  /**
+   * Max blob size (bytes) the server may inline with row data — written into
+   * every op_execute at protocol ≥ 19. 0 = disabled.
+   */
+  inlineBlobSize = 0;
+  /**
+   * op_inline_blob consumer (set by the attachment): the server volunteers
+   * small blobs ahead of fetch/sql responses; they must be consumed wherever
+   * ops are read, so readOp() dispatches them here.
+   */
+  onInlineBlob?: (txId: number, blobId: Buffer, info: Buffer, data: Buffer) => void;
 
   constructor(readonly transport: Transport) {}
 
@@ -81,6 +92,17 @@ export class WireConnection {
       if (op === Op.response && this.deferredResponses > 0) {
         this.deferredResponses--;
         await this.parseResponseBody(); // errors from deferred ops are dropped by design
+        continue;
+      }
+      if (op === Op.inline_blob) {
+        // P_INLINE_BLOB: tran id (int32), blob id (8 raw), blob info
+        // (counted opaque), blob data (counted opaque; UInt16LE-framed
+        // segments inside — same framing as op_get_segment responses).
+        const txId = await this.readInt32();
+        const blobId = Buffer.from(await this.transport.read(8));
+        const info = Buffer.from(await this.readOpaque());
+        const data = Buffer.from(await this.readOpaque());
+        this.onInlineBlob?.(txId, blobId, info, data); // no handler → drop (stay in sync)
         continue;
       }
       return op;

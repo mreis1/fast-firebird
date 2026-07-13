@@ -16,6 +16,7 @@ import { resolveTextCodec, type TextCodec, type TextCodecOptions } from '../char
 import { StatementCache } from './statement-cache.js';
 import { expandStarSql } from './expand-star.js';
 import { BlobPrefetcher } from './blob-prefetch.js';
+import { InlineBlobCache } from './inline-cache.js';
 import { Blob, type BlobScope } from './blob.js';
 import { FirebirdError } from './errors.js';
 import type { SqlVarDesc } from '../protocol/info.js';
@@ -102,6 +103,8 @@ export interface SessionContext {
   lock: OpLock;
   /** expandStar rewrite cache: (sql, only, exclude) → rewritten SQL. */
   starCache?: Map<string, string>;
+  /** FB5 protocol ≥ 19 inline blob cache (blob reads consult it first). */
+  inline?: InlineBlobCache;
 }
 
 /** Per-run context: user query options + transaction liveness for lazy blobs. */
@@ -268,6 +271,7 @@ class RowMapper {
           txHandle,
           chunkSize: ctx.opts.blobReadChunkSize,
           isAlive: run.txAlive,
+          inline: ctx.inline ? { take: (idHex) => ctx.inline!.take(txHandle, idHex) } : undefined,
         }
       : null;
   }
@@ -279,12 +283,21 @@ class RowMapper {
    */
   async materialize(rows: unknown[][]): Promise<void> {
     if (!this.hasKeptEagerBlobs) return;
+    const inline = this.ctx.inline;
     const cells: { row: unknown[]; i: number; ref: BlobRef }[] = [];
     for (const row of rows) {
       for (let i = 0; i < row.length; i++) {
         if (this.keys[i] === null || this.lazyCol[i]) continue; // dropped/lazy → not now
         const cell = row[i];
-        if (cell instanceof BlobRef) cells.push({ row, i, ref: cell });
+        if (!(cell instanceof BlobRef)) continue;
+        // FB5 inline blobs: the server already shipped small blobs with the
+        // rows — serve them straight from the cache, zero wire ops.
+        const inlined = inline?.take(this.txHandle, cell.id.toString('hex'));
+        if (inlined) {
+          row[i] = cell.subType === 1 && this.blobCodec[i] ? this.blobCodec[i]!.decode(inlined) : inlined;
+          continue;
+        }
+        cells.push({ row, i, ref: cell });
       }
     }
     if (cells.length === 0) return;
@@ -625,7 +638,14 @@ export async function* streamRows(
     if (raCfg) {
       prefetchCols = mapper!.prefetchableColumns(raCfg.columns);
       if (prefetchCols.length > 0) {
-        prefetcher = new BlobPrefetcher(lock, ctx.wire, txHandle, ctx.opts.blobReadChunkSize, raCfg);
+        prefetcher = new BlobPrefetcher(
+          lock,
+          ctx.wire,
+          txHandle,
+          ctx.opts.blobReadChunkSize,
+          raCfg,
+          ctx.inline ? (idHex) => ctx.inline!.take(txHandle, idHex) : undefined,
+        );
         mapper!.setPrefetch(prefetcher);
       }
     }

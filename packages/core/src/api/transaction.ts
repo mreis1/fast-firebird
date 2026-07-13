@@ -91,6 +91,7 @@ export class Transaction {
       this.finished = false;
       throw err;
     }
+    this.att.session.inline?.clearTx(this.handle); // unread inline blobs die with the tx
   }
 
   async rollback(): Promise<void> {
@@ -102,6 +103,7 @@ export class Transaction {
       this.finished = false;
       throw err;
     }
+    this.att.session.inline?.clearTx(this.handle);
   }
 
   /** Commit but keep the transaction context open for further work. */

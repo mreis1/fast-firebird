@@ -107,6 +107,12 @@ export const PROTOCOL_VERSION13 = FB_PROTOCOL_FLAG | 13; // FB3
 export const PROTOCOL_VERSION14 = FB_PROTOCOL_FLAG | 14;
 export const PROTOCOL_VERSION15 = FB_PROTOCOL_FLAG | 15; // FB4
 export const PROTOCOL_VERSION16 = FB_PROTOCOL_FLAG | 16; // FB4/FB5
+// Protocol 19 (FB 5.0.2+): op_inline_blob — small blobs ride with the rows.
+// We deliberately skip offering 17 (op_batch_sync) and 18 (op_fetch_scroll):
+// nothing we send uses their features, and every version-gated field we DO
+// send (op_execute timeout/cursor_flags/inline_blob_size) is already encoded
+// per negotiated version in executeStatement.
+export const PROTOCOL_VERSION19 = FB_PROTOCOL_FLAG | 19; // FB 5.0.2+
 
 export const enum Ptype {
   rpc = 2,
@@ -123,6 +129,7 @@ export const SUPPORTED_PROTOCOLS: ReadonlyArray<readonly [number, number, number
   [PROTOCOL_VERSION14, ARCHITECTURE_GENERIC, Ptype.lazy_send, Ptype.lazy_send, 2],
   [PROTOCOL_VERSION15, ARCHITECTURE_GENERIC, Ptype.lazy_send, Ptype.lazy_send, 3],
   [PROTOCOL_VERSION16, ARCHITECTURE_GENERIC, Ptype.lazy_send, Ptype.lazy_send, 4],
+  [PROTOCOL_VERSION19, ARCHITECTURE_GENERIC, Ptype.lazy_send, Ptype.lazy_send, 5],
 ];
 
 export const enum WireCryptLevel {

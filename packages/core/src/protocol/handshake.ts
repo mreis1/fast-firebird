@@ -43,7 +43,7 @@ export interface PendingAuth {
 }
 
 export interface HandshakeResult {
-  /** Negotiated protocol version (13..16). */
+  /** Negotiated protocol version (13..16, or 19 on FB 5.0.2+). */
   protocolVersion: number;
   /** Negotiated packet type (ptype_lazy_send for all offers we make). */
   minType: number;

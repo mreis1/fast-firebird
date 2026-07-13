@@ -23,7 +23,9 @@ describe.each(FB_SERVERS)('blobReadAhead on Firebird $version', ({ port, version
   const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms));
 
   beforeAll(async () => {
-    db = await freshDb(port);
+    // Inline blobs off: this suite asserts the read-ahead wire machinery
+    // (FB5 would otherwise serve the small memos inline and skew RT counts).
+    db = await freshDb(port, { maxInlineBlobSize: 0 });
     await ddl(db, `recreate table ${t} (id integer not null primary key, doc blob, memo blob sub_type text)`);
     await db.transaction(async (tx) => {
       for (let i = 1; i <= N; i++) await tx.execute(`insert into ${t} values (?,?,?)`, [i, payload(i), `memo-${i}`]);
@@ -143,7 +145,7 @@ describe.each(FB_SERVERS)('blobReadAhead on Firebird $version', ({ port, version
   });
 
   it('connection-level default applies; per-query false disables it', async () => {
-    const conn = await connect({ ...FB_BASE, port, database: (db as any).options.database, blobs: 'lazy', blobReadAhead: 1 });
+    const conn = await connect({ ...FB_BASE, port, database: (db as any).options.database, blobs: 'lazy', blobReadAhead: 1, maxInlineBlobSize: 0 });
     try {
       // Default on: next-row blob free.
       const a = conn.queryStream(`select id, doc from ${t} where id <= 2 order by id`)[Symbol.asyncIterator]();

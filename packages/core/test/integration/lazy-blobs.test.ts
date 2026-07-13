@@ -9,7 +9,10 @@ describe.each(FB_SERVERS)('lazy blobs on Firebird $version', ({ port, version })
   const N = 40;
 
   beforeAll(async () => {
-    db = await freshDb(port);
+    // This suite measures the explicit blob wire machinery — FB5 inline
+    // blobs (which make small-blob reads free) are covered by their own
+    // suite and disabled here so round-trip assertions stay meaningful.
+    db = await freshDb(port, { maxInlineBlobSize: 0 });
     await ddl(db, `recreate table ${t} (id integer, b1 blob, b2 blob, memo blob sub_type text)`);
     await db.transaction(async (tx) => {
       for (let i = 1; i <= N; i++) {

@@ -14,6 +14,7 @@ import {
 } from './session.js';
 import { FirebirdBlobError, FirebirdConnectionError } from './errors.js';
 import { StatementCache } from './statement-cache.js';
+import { InlineBlobCache } from './inline-cache.js';
 import { PreparedStatement } from './prepared.js';
 import { Transaction } from './transaction.js';
 import { blobsMayProduceLazy, resolveOptions, type FirebirdConnectionOptions, type LegacyOptionAliases, type ResolvedOptions } from './options.js';
@@ -39,12 +40,22 @@ export class Attachment {
     readonly handshake: HandshakeResult,
     readonly dbHandle: number,
   ) {
+    // FB 5.0.2+ inline blobs (protocol ≥ 19): announce the size in every
+    // op_execute, and route incoming op_inline_blob packets to a tx-scoped
+    // cache that blob reads consult first (zero round trips on a hit).
+    let inline: InlineBlobCache | null = null;
+    if (handshake.protocolVersion >= 19 && options.maxInlineBlobSize > 0) {
+      inline = new InlineBlobCache(options.maxBlobCacheSize);
+      wire.inlineBlobSize = options.maxInlineBlobSize;
+      wire.onInlineBlob = (txId, blobId, _info, data) => inline!.store(txId, blobId, data);
+    }
     this.session = {
       wire,
       dbHandle,
       opts: options,
       cache: options.statementCacheSize > 0 ? new StatementCache(wire, options.statementCacheSize) : null,
       lock: (fn) => this.withLock(fn),
+      inline: inline ?? undefined,
     };
   }
 
@@ -307,6 +318,7 @@ export class Attachment {
     this.detached = true;
     this.eventChannel?.closeAll();
     this.eventChannel = null;
+    this.session.inline?.clear();
     try {
       await detachDatabase(this.wire);
     } catch {

@@ -21,6 +21,10 @@ export interface BlobScope {
     take(idHex: string): Promise<Buffer> | null;
     has(idHex: string): boolean;
   };
+  /** FB5 inline-blob cache view, bound to this scope's transaction. */
+  inline?: {
+    take(idHex: string): Buffer | null;
+  };
 }
 
 /**
@@ -82,6 +86,12 @@ export class Blob {
       if (!(b instanceof Blob) || seen.has(b)) continue;
       seen.add(b);
       if (b.cached !== null || b.cursorHandle !== null || b.consumedBytes > 0) continue;
+      // FB5 inline blobs: already local — claim them here and now.
+      const inlined = b.scope.inline?.take(b.id.toString('hex'));
+      if (inlined) {
+        b.cached = inlined;
+        continue;
+      }
       if (b.scope.prefetch?.has(b.id.toString('hex'))) continue; // read-ahead owns it
       const byTx = groups.get(b.scope.wire) ?? new Map<number, Blob[]>();
       groups.set(b.scope.wire, byTx);
@@ -115,7 +125,12 @@ export class Blob {
     if (n <= 0) return Buffer.alloc(0);
     if (this.cached) return this.cached.subarray(0, Math.min(n, this.cached.length));
     this.assertAlive();
-    // Prefetched bytes are already on their way — just materialize.
+    // Inline/prefetched bytes are already local — just materialize.
+    const inlined = this.scope.inline?.take(this.id.toString('hex'));
+    if (inlined) {
+      this.cached = inlined;
+      return inlined.subarray(0, Math.min(n, inlined.length));
+    }
     if (this.scope.prefetch?.has(this.id.toString('hex'))) {
       const full = await this.buffer();
       return full.subarray(0, Math.min(n, full.length));
@@ -180,6 +195,12 @@ export class Blob {
   async buffer(): Promise<Buffer> {
     if (this.cached) return this.cached;
     this.assertAlive();
+    // FB5 inline blobs: the server may have shipped this blob with the rows.
+    const inlined = this.scope.inline?.take(this.id.toString('hex'));
+    if (inlined) {
+      this.cached = inlined;
+      return inlined;
+    }
     // Read-ahead may already hold (or be fetching) this blob's bytes.
     const prefetched = this.scope.prefetch?.take(this.id.toString('hex'));
     if (prefetched) {
@@ -243,7 +264,12 @@ export class Blob {
   stream(opts: { chunkSize?: number } = {}): Readable {
     this.assertAlive();
     this.promoteIfComplete();
-    // Cached or prefetched bytes stream straight from memory.
+    if (!this.cached) {
+      // FB5 inline blobs: claim before deciding how to stream.
+      const inlined = this.scope.inline?.take(this.id.toString('hex'));
+      if (inlined) this.cached = inlined;
+    }
+    // Cached, inline or prefetched bytes stream straight from memory.
     if (this.cached || this.scope.prefetch?.has(this.id.toString('hex'))) {
       const self = this;
       return Readable.from(

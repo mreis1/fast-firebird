@@ -115,6 +115,18 @@ export interface FirebirdConnectionOptions {
   blobs?: BlobsOption;
   /** Default lazy-blob read-ahead for `queryStream` (see BlobReadAheadOption). */
   blobReadAhead?: BlobReadAheadOption;
+  /**
+   * FB 5.0.2+ (protocol ≥ 19): blobs up to this size (bytes) ride INLINE with
+   * the row data — zero extra round trips for small blobs/memos. Clamped to
+   * 0–65535; 0 disables. Ignored by older servers. Default 65535.
+   */
+  maxInlineBlobSize?: number;
+  /**
+   * Byte budget for received-but-unread inline blobs per connection
+   * (mirrors fbclient's blob cache). Overflow is silently dropped — those
+   * blobs read via the normal path. Default 10 MiB.
+   */
+  maxBlobCacheSize?: number;
   blobWriteChunkSize?: number;
   blobReadChunkSize?: number;
   /** Rows requested per fetch round trip. */
@@ -162,6 +174,8 @@ export interface ResolvedOptions {
   blobAsText: boolean;
   blobs: BlobsOption;
   blobReadAhead: ResolvedReadAhead | null;
+  maxInlineBlobSize: number;
+  maxBlobCacheSize: number;
   blobWriteChunkSize: number;
   blobReadChunkSize: number;
   fetchSize: number;
@@ -199,6 +213,8 @@ export function resolveOptions(raw: FirebirdConnectionOptions & LegacyOptionAlia
     blobAsText: raw.blobAsText ?? false,
     blobs: raw.blobs ?? 'eager',
     blobReadAhead: resolveReadAhead(raw.blobReadAhead),
+    maxInlineBlobSize: clamp(raw.maxInlineBlobSize ?? 65_535, 0, 65_535),
+    maxBlobCacheSize: Math.max(0, raw.maxBlobCacheSize ?? 10 * 1024 * 1024),
     // Wire maximum by default — blob throughput is round-trip-bound.
     blobWriteChunkSize: clamp(raw.blobWriteChunkSize ?? raw.blobChunkSize ?? 65_535, 1, 65_535),
     blobReadChunkSize: clamp(raw.blobReadChunkSize ?? 65_535, 1, 65_535),

@@ -70,9 +70,9 @@ export function nextDatabasePath(port: number): string {
 }
 
 /** Create a brand-new isolated database for a test suite. Drop it in afterAll. */
-export async function freshDb(port: number): Promise<import('../../src/index.js').Attachment> {
+export async function freshDb(port: number, extra: Record<string, unknown> = {}): Promise<import('../../src/index.js').Attachment> {
   const { createDatabase } = await import('../../src/index.js');
-  return createDatabase({ ...FB_BASE, port, database: nextDatabasePath(port) });
+  return createDatabase({ ...FB_BASE, port, database: nextDatabasePath(port), ...extra });
 }
 
 /** Drop an isolated database created via `nextDatabasePath` (best-effort). */

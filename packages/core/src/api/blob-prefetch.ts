@@ -35,6 +35,8 @@ export class BlobPrefetcher {
     private readonly txHandle: number,
     private readonly chunkSize: number,
     private readonly cfg: ResolvedReadAhead,
+    /** FB5 inline-blob claim (bound to this tx) — a hit needs no wire at all. */
+    private readonly inlineTake?: (idHex: string) => Buffer | null,
   ) {}
 
   /** Register a fetched row's lazy blob ids (in row order). */
@@ -134,6 +136,20 @@ export class BlobPrefetcher {
   /** Fetch one blob in bounded op-lock slices (other ops interleave between slices). */
   private async fetch(e: PrefetchEntry): Promise<void> {
     e.state = 'fetching';
+    // Inline blobs are already local — no wire, no lock, done immediately.
+    const inlined = this.inlineTake?.(e.idHex);
+    if (inlined) {
+      e.chunks = [inlined];
+      e.bytes = inlined.length;
+      this.usedBytes += inlined.length;
+      e.state = 'done';
+      if (e.claimed && e.resolve) {
+        const buf = Buffer.concat(e.chunks);
+        this.release(e);
+        e.resolve(buf);
+      }
+      return;
+    }
     let handle: number | null = null;
     try {
       let eof = false;

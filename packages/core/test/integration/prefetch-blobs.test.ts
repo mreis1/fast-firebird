@@ -16,7 +16,9 @@ describe.each(FB_SERVERS)('prefetchBlobs on Firebird $version', ({ port, version
   const shas: Record<number, string> = {};
 
   beforeAll(async () => {
-    db = await freshDb(port);
+    // Inline blobs off: the bulk-vs-serial flush comparisons need the blobs
+    // to actually cross the wire on demand (FB5 would inline these sizes).
+    db = await freshDb(port, { maxInlineBlobSize: 0 });
     await ddl(db, `recreate table ${t} (id integer not null primary key, doc blob, memo blob sub_type text)`);
     await db.transaction(async (tx) => {
       for (let i = 1; i <= N; i++) {
