@@ -183,10 +183,12 @@ only when API surface stabilizes (avoid premature package fragmentation).
    the inverse): name specific columns. The subtype shorthand shipped
    2026-07-13 (`'lazy-binary'` / `'lazy-text'` — RowMapper decides per column
    by blob subtype); only the named-column form remains here.
-5. **Blob head/resume cursor** — `blob.head(n)` for magic-number sniffing that
-   KEEPS the handle open at its position, so a later `.stream()`/`.buffer()`
-   resumes instead of re-transferring (segmented blobs are forward-only; a kept
-   cursor is the right primitive). `stream()` abandon-close shipped 2026-07-13.
+~~5. Blob head/resume cursor~~ — SHIPPED 2026-07-13: `blob.head(n)` (raw
+   bytes, 2 flushes for a magic number) keeps the handle open at position;
+   `buffer()`/`stream()`/`text()` resume from the cursor (no re-open, no
+   re-transfer — RT-asserted), widening heads read only the delta, full
+   consumption promotes to the cache, `blob.close()` releases an unfinished
+   cursor. Composes with blobReadAhead (prefetched heads are free).
 6. **Blob write streaming** — `Writable`/AsyncIterable input for blob params
    (reads already stream via `Blob.stream()`).
 7. **core `autoUpgradeReadOnly`** — opt-in RO→RW transaction auto-upgrade with
