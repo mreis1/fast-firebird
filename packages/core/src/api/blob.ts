@@ -1,5 +1,5 @@
 import { Readable } from 'node:stream';
-import { blobTotalLength, closeBlobDeferred, getBlobSegment, openBlob, readBlob, readBlobWindow } from '../protocol/blob.js';
+import { blobTotalLength, closeBlobDeferred, getBlobSegment, openBlob, readBlob, readBlobs, readBlobWindow } from '../protocol/blob.js';
 import { FirebirdBlobError } from './errors.js';
 import type { WireConnection } from '../protocol/wire.js';
 import type { TextCodec } from '../charset/decoder.js';
@@ -54,6 +54,52 @@ export class Blob {
       throw new FirebirdBlobError(
         "blob handle used after its transaction closed — read lazy blobs before commit, or use blobs:'eager'",
       );
+    }
+  }
+
+  /**
+   * Bulk-materialize many lazy handles through ONE cross-blob pipeline
+   * (open/read/close overlapped — the same engine eager mode uses), instead
+   * of one serialized round-trip conversation per handle. Afterwards each
+   * blob's `buffer()`/`text()`/`stream()` is served from memory.
+   *
+   * ```ts
+   * const rows = await tx.query('select id, doc from files', [], { blobs: 'lazy' });
+   * await Blob.prefetch(rows.map((r) => r.DOC as Blob)); // one pipeline
+   * ```
+   *
+   * Convenience rules: `null`/`undefined` entries, duplicates, already-cached
+   * blobs, blobs with an open `head()` cursor (they resume on their own) and
+   * blobs tracked by a `blobReadAhead` store are skipped silently. Handles
+   * from different queries are grouped per connection + transaction. Throws
+   * if any target transaction is closed or any blob fails to read.
+   */
+  static async prefetch(blobs: ReadonlyArray<Blob | null | undefined>): Promise<void> {
+    // Group by wire + transaction so each group is one pipeline.
+    const groups = new Map<WireConnection, Map<number, Blob[]>>();
+    const seen = new Set<Blob>();
+    for (const b of blobs) {
+      if (!(b instanceof Blob) || seen.has(b)) continue;
+      seen.add(b);
+      if (b.cached !== null || b.cursorHandle !== null || b.consumedBytes > 0) continue;
+      if (b.scope.prefetch?.has(b.id.toString('hex'))) continue; // read-ahead owns it
+      const byTx = groups.get(b.scope.wire) ?? new Map<number, Blob[]>();
+      groups.set(b.scope.wire, byTx);
+      const group = byTx.get(b.scope.txHandle) ?? [];
+      byTx.set(b.scope.txHandle, group);
+      group.push(b);
+    }
+    for (const byTx of groups.values()) {
+      for (const group of byTx.values()) {
+        const scope = group[0]!.scope;
+        if (!scope.isAlive()) {
+          throw new FirebirdBlobError('prefetchBlobs: a blob handle belongs to an already-closed transaction');
+        }
+        const datas = await scope.lock(() =>
+          readBlobs(scope.wire, scope.txHandle, group.map((b) => b.id), scope.chunkSize),
+        );
+        for (let k = 0; k < group.length; k++) group[k]!.cached = datas[k]!;
+      }
     }
   }
 
@@ -279,4 +325,9 @@ export class Blob {
       },
     });
   }
+}
+
+/** Functional alias for {@link Blob.prefetch}: bulk-materialize lazy handles. */
+export function prefetchBlobs(blobs: ReadonlyArray<Blob | null | undefined>): Promise<void> {
+  return Blob.prefetch(blobs);
 }

@@ -102,7 +102,7 @@ describe.each(FB_SERVERS)('blob write streaming on Firebird $version', ({ port, 
   it('binding a lazy Blob handle directly is rejected with guidance (deadlock guard)', async () => {
     await db.transaction(async (tx) => {
       const [src] = await tx.query(`select doc from ${t} where id = 1`, [], { blobs: 'lazy' });
-      await expect(tx.execute(`insert into ${t} (id, doc) values (?, ?)`, [6, src!.DOC as Blob])).rejects.toThrow(
+      await expect(tx.execute(`insert into ${t} (id, doc) values (?, ?)`, [6, src!.DOC as never])).rejects.toThrow(
         /await blob\.buffer\(\)/,
       );
       // The documented way works: materialize, then bind.

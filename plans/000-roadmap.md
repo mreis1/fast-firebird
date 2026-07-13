@@ -175,11 +175,12 @@ only when API surface stabilizes (avoid premature package fragmentation).
    `blobReadAhead` (`true | depth | {columns, depth, maxBytes}`, per-query or
    connection default) prefetches upcoming lazy blobs in bounded op-lock
    slices during `queryStream` (exporter loop 136→82 ms/row at 30 ms RTT).
-   Remaining follow-ups: deepen the prefetcher (overlap next blob's open with
-   the current prefetch), and an explicit `prefetchBlobs(handles)` bulk helper
-   for buffered-lazy access patterns. Companion still open: FB 5.0.2+
-   protocol-level inline blobs (`op_inline_blob`) would make small blobs free
-   on FB5.
+   `prefetchBlobs(handles)` / `Blob.prefetch` bulk helper for buffered-lazy
+   patterns shipped 2026-07-13 (one readBlobs pipeline per connection+tx
+   group; skips cached/cursor/read-ahead/null entries). Remaining follow-up:
+   deepen the streaming prefetcher (overlap next blob's open with the current
+   prefetch). Companion still open: FB 5.0.2+ protocol-level inline blobs
+   (`op_inline_blob`) would make small blobs free on FB5.
 ~~4. Per-column blob mode~~ — SHIPPED 2026-07-13, both forms: subtype
    shorthands `'lazy-binary'`/`'lazy-text'`, and the named-column form
    `blobs: {default?, eager: [cols], lazy: [cols]}` (bare or ALIAS.COL,
