@@ -141,7 +141,10 @@ only when API surface stabilizes (avoid premature package fragmentation).
       (user-defined columns + blob file picker, insert+fetch timings).
 - [ ] Publish `@fast-firebird/core` (npm or private registry) — blocks real
       deployment of the nf2-ext branch (today a `file:` link)
-- [ ] CI: GitHub Actions with FB 3/4/5 service containers
+- [x] CI: GitHub Actions (`.github/workflows/ci.yml`, 2026-07-13) — same
+      docker-compose matrix as local dev (FB3/4/5 + legacy), frozen-lockfile
+      install with a stub for the gitignored nf2-ext file: dep, typecheck +
+      build + 674 core / 30 drizzle tests; validated via clean-clone dry run
 - [ ] Benchmarks expansion: tc/toxiproxy latency matrix, blob throughput, charset overhead
 - [ ] Docs site / README polish
 

@@ -1,0 +1,77 @@
+# fast-firebird CI: typecheck + build + full test suite against a real
+# Firebird 3/4/5 (+ Legacy_Auth) container matrix — the same compose file
+# used for local development, so CI and dev environments cannot drift.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # references/ holds gitignored study clones, and apps/demo declares a
+      # file: dependency into one of them (node-firebird-2-ext). CI never
+      # runs the demo, but pnpm must still resolve the workspace graph — so
+      # stub the manifest exactly as the lockfile snapshot recorded it.
+      - name: Stub gitignored file dependency (node-firebird-2-ext)
+        run: |
+          mkdir -p references/node-firebird2-ext
+          cat > references/node-firebird2-ext/package.json <<'EOF'
+          {
+            "name": "node-firebird-2-ext",
+            "version": "1.0.0",
+            "main": "dist/index.js",
+            "dependencies": {
+              "@fast-firebird/core": "file:../../packages/core",
+              "generic-pool": "^3.9.0",
+              "iconv-lite": "^0.7.0",
+              "moment": "^2.30.1",
+              "rxjs": "^7.8.2"
+            }
+          }
+          EOF
+
+      - uses: pnpm/action-setup@v4 # version comes from package.json "packageManager"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # Order matters: drizzle's typecheck resolves @fast-firebird/core via
+      # its BUILT type declarations, so core builds first.
+      - name: Typecheck & build
+        run: |
+          pnpm --filter @fast-firebird/core typecheck
+          pnpm --filter @fast-firebird/core build
+          pnpm --filter @fast-firebird/drizzle typecheck
+          pnpm --filter @fast-firebird/drizzle build
+
+      # Same compose file + project name as local dev (plans/docker-safety.md).
+      # --wait blocks on the per-server TCP healthchecks; first boot also
+      # provisions /var/lib/firebird/data/test.fdb via FIREBIRD_DATABASE.
+      - name: Start Firebird 3/4/5 (+legacy) matrix
+        run: docker compose -p fast-firebird-test -f docker/docker-compose.yml up -d --wait
+
+      - name: Core tests (unit + integration on FB3/4/5)
+        run: pnpm --filter @fast-firebird/core test
+
+      - name: Drizzle tests (FB3/4/5)
+        run: pnpm --filter @fast-firebird/drizzle test
+
+      - name: Firebird server logs (on failure)
+        if: failure()
+        run: docker compose -p fast-firebird-test -f docker/docker-compose.yml logs --tail 150
