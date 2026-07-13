@@ -16,6 +16,11 @@ export interface BlobScope {
   chunkSize: number;
   /** True while the owning transaction + connection are still usable. */
   isAlive(): boolean;
+  /** Optional read-ahead store (queryStream blobReadAhead). */
+  prefetch?: {
+    take(idHex: string): Promise<Buffer> | null;
+    has(idHex: string): boolean;
+  };
 }
 
 /**
@@ -47,7 +52,11 @@ export class Blob {
   async buffer(): Promise<Buffer> {
     if (this.cached) return this.cached;
     this.assertAlive();
-    const data = await this.scope.lock(() => readBlob(this.scope.wire, this.scope.txHandle, this.id, this.scope.chunkSize));
+    // Read-ahead may already hold (or be fetching) this blob's bytes.
+    const prefetched = this.scope.prefetch?.take(this.id.toString('hex'));
+    const data = prefetched
+      ? await prefetched
+      : await this.scope.lock(() => readBlob(this.scope.wire, this.scope.txHandle, this.id, this.scope.chunkSize));
     this.cached = data;
     return data;
   }
@@ -87,6 +96,15 @@ export class Blob {
    */
   stream(opts: { chunkSize?: number } = {}): Readable {
     this.assertAlive();
+    // Cached or prefetched bytes stream straight from memory.
+    if (this.cached || this.scope.prefetch?.has(this.id.toString('hex'))) {
+      const self = this;
+      return Readable.from(
+        (async function* () {
+          yield await self.buffer();
+        })(),
+      );
+    }
     const scope = this.scope;
     const id = this.id;
     const chunkSize = opts.chunkSize ?? scope.chunkSize;

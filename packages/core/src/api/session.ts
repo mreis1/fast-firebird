@@ -9,17 +9,18 @@ import {
   type PreparedStatementInfo,
 } from '../protocol/statement.js';
 import { nextFetchCount } from '../protocol/fetch-plan.js';
-import { readBlob, writeBlob } from '../protocol/blob.js';
+import { readBlobs, writeBlob } from '../protocol/blob.js';
 import { BlobRef, DecFloatVal, makeColumnReader, type ParamValue } from '../protocol/msgcodec.js';
 import { encodeDecFloat } from '../types/decfloat.js';
 import { resolveTextCodec, type TextCodec, type TextCodecOptions } from '../charset/decoder.js';
 import { StatementCache } from './statement-cache.js';
 import { expandStarSql } from './expand-star.js';
+import { BlobPrefetcher } from './blob-prefetch.js';
 import { Blob, type BlobScope } from './blob.js';
 import { FirebirdError } from './errors.js';
 import type { SqlVarDesc } from '../protocol/info.js';
 import type { WireConnection } from '../protocol/wire.js';
-import type { BlobMode, ResolvedOptions } from './options.js';
+import { resolveReadAhead, type BlobMode, type BlobReadAheadOption, type ResolvedOptions, type ResolvedReadAhead } from './options.js';
 
 export type Row = Record<string, unknown>;
 
@@ -71,6 +72,11 @@ export interface QueryOptions {
    * `QueryResult.rows` holds `unknown[]` per row.
    */
   rowMode?: 'object' | 'array';
+  /**
+   * Lazy-blob read-ahead for `queryStream` (see `BlobReadAheadOption`).
+   * Overrides the connection-level default; `false` disables it.
+   */
+  blobReadAhead?: BlobReadAheadOption;
   /**
    * Rewrite top-level `*` / `alias.*` / `table.*` into an explicit column
    * list (minus `exclude`, filtered by `only`) BEFORE preparing — excluded
@@ -257,17 +263,44 @@ class RowMapper {
       : null;
   }
 
-  /** Eagerly materialize kept eager blob cells (call while holding the op-lock). */
-  async materialize(row: unknown[]): Promise<void> {
+  /**
+   * Eagerly materialize the kept eager blob cells of a whole batch (call
+   * while holding the op-lock). All blobs go through `readBlobs`, which
+   * overlaps open/read/close across blobs — no idle RTTs between them.
+   */
+  async materialize(rows: unknown[][]): Promise<void> {
     if (!this.hasKeptEagerBlobs) return;
-    for (let i = 0; i < row.length; i++) {
-      if (this.keys[i] === null || this.lazyCol[i]) continue; // dropped/lazy → not now
-      const cell = row[i];
-      if (cell instanceof BlobRef) {
-        const data = await readBlob(this.ctx.wire, this.txHandle, cell.id, this.ctx.opts.blobReadChunkSize);
-        row[i] = cell.subType === 1 && this.blobCodec[i] ? this.blobCodec[i]!.decode(data) : data;
+    const cells: { row: unknown[]; i: number; ref: BlobRef }[] = [];
+    for (const row of rows) {
+      for (let i = 0; i < row.length; i++) {
+        if (this.keys[i] === null || this.lazyCol[i]) continue; // dropped/lazy → not now
+        const cell = row[i];
+        if (cell instanceof BlobRef) cells.push({ row, i, ref: cell });
       }
     }
+    if (cells.length === 0) return;
+    const datas = await readBlobs(this.ctx.wire, this.txHandle, cells.map((c) => c.ref.id), this.ctx.opts.blobReadChunkSize);
+    for (let k = 0; k < cells.length; k++) {
+      const { row, i, ref } = cells[k]!;
+      row[i] = ref.subType === 1 && this.blobCodec[i] ? this.blobCodec[i]!.decode(datas[k]!) : datas[k]!;
+    }
+  }
+
+  /** Kept lazy blob column indices, optionally filtered by (lowercased) names. */
+  prefetchableColumns(filter: string[] | null): number[] {
+    const out: number[] = [];
+    for (let i = 0; i < this.keys.length; i++) {
+      const key = this.keys[i];
+      if (key == null || !this.lazyCol[i]) continue;
+      if (filter && !filter.includes(key.toLowerCase())) continue;
+      out.push(i);
+    }
+    return out;
+  }
+
+  /** Attach a read-ahead store so lazy Blob handles can serve from it. */
+  setPrefetch(p: NonNullable<BlobScope['prefetch']>): void {
+    if (this.scope) this.scope.prefetch = p;
   }
 
   /** Build the result row: an object (default) or a positional array. */
@@ -354,10 +387,8 @@ export async function executePrepared(
   }
 
   // 3. Only now is it safe to issue new requests: eagerly materialize the
-  //    kept blob cells (lazy mode leaves BlobRefs for the mapper to wrap).
-  if (mapper.hasKeptEagerBlobs) {
-    for (const row of rows) await mapper.materialize(row);
-  }
+  //    kept blob cells (lazy columns keep BlobRefs for the mapper to wrap).
+  await mapper.materialize(rows);
 
   // 4. Close the cursor (deferred — rides with the next packet) so the
   //    statement handle can be re-executed later.
@@ -521,6 +552,26 @@ export async function* streamRows(
   let mapper: RowMapper | null = null;
   let cursorOpen = false;
   let failed = false;
+  // Lazy-blob read-ahead (query option overrides the connection default).
+  const raCfg: ResolvedReadAhead | null =
+    run.query.blobReadAhead !== undefined ? resolveReadAhead(run.query.blobReadAhead) : ctx.opts.blobReadAhead;
+  let prefetcher: BlobPrefetcher | null = null;
+  let prefetchCols: number[] = [];
+  let registeredRows = 0;
+  let rowIdx = 0;
+  /** Register a batch's lazy blob ids with the prefetcher (raw rows keep BlobRefs). */
+  const register = (rows: unknown[][]): void => {
+    if (!prefetcher) return;
+    for (const r of rows) {
+      const ids: Buffer[] = [];
+      for (const i of prefetchCols) {
+        const c = r[i];
+        if (c instanceof BlobRef) ids.push(c.id);
+      }
+      if (ids.length > 0) prefetcher.addRow(registeredRows, ids);
+      registeredRows++;
+    }
+  };
   try {
     const first = await lock(async () => {
       if (!info) info = await prepareInfo(ctx, txHandle, sql);
@@ -539,11 +590,25 @@ export async function* streamRows(
       } else {
         batch = { rows: exec.procRow ? [exec.procRow] : [], eof: true };
       }
-      for (const r of batch.rows) await mapper.materialize(r);
+      await mapper.materialize(batch.rows);
       return { batch, fc };
     });
 
-    for (const r of first.batch.rows) yield mapper!.shape(r);
+    // Attach read-ahead before any row is shaped (raw rows still hold BlobRefs).
+    if (raCfg) {
+      prefetchCols = mapper!.prefetchableColumns(raCfg.columns);
+      if (prefetchCols.length > 0) {
+        prefetcher = new BlobPrefetcher(lock, ctx.wire, txHandle, ctx.opts.blobReadChunkSize, raCfg);
+        mapper!.setPrefetch(prefetcher);
+      }
+    }
+
+    register(first.batch.rows);
+    for (const r of first.batch.rows) {
+      prefetcher?.advance(rowIdx);
+      yield mapper!.shape(r);
+      rowIdx++;
+    }
 
     let eof = first.batch.eof;
     let fc = first.fc;
@@ -551,16 +616,22 @@ export async function* streamRows(
       const b = await lock(async () => {
         fc = nextFetchCount(info!.rowWidth, ctx.opts.fetchSize, fc);
         const batch = await fetchRows(ctx.wire, info!, fc);
-        for (const r of batch.rows) await mapper!.materialize(r);
+        await mapper!.materialize(batch.rows);
         return batch;
       });
-      for (const r of b.rows) yield mapper!.shape(r);
+      register(b.rows);
+      for (const r of b.rows) {
+        prefetcher?.advance(rowIdx);
+        yield mapper!.shape(r);
+        rowIdx++;
+      }
       eof = b.eof;
     }
   } catch (err) {
     failed = true;
     throw err;
   } finally {
+    prefetcher?.close();
     await lock(async () => {
       if (!info) return;
       if (cursorOpen) freeStatement(ctx.wire, info.handle, FreeStatement.DSQL_close);

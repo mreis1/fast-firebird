@@ -52,13 +52,22 @@ describe.each(FB_SERVERS)('lazy blobs on Firebird $version', ({ port, version })
         // B1/B2 handles deliberately untouched
       }
       expect(read).toBe(N);
-      const lazyRT = db.roundTrips - before;
 
-      // Eager reads all four blob columns → materially more round trips.
+      // Untouched lazy handles cost zero blob round trips: a pure fetch pass
+      // stays within a handful of flushes no matter how many blob columns.
       const before2 = db.roundTrips;
+      let rows = 0;
+      for await (const _row of tx.queryStream(`select id, b1, b2, memo from ${t} where id <= ${N} order by id`, [], { blobs: 'lazy' })) rows++;
+      const lazyUntouchedRT = db.roundTrips - before2;
+      expect(rows).toBe(N);
+      expect(lazyUntouchedRT).toBeLessThanOrEqual(6); // fetch batches only
+
+      // Eager materializes 3×N blobs — cheap since cross-blob pipelining
+      // (~1 flush/blob), but still clearly above the untouched-lazy pass.
+      const before3 = db.roundTrips;
       await tx.query(`select id, b1, b2, memo from ${t} where id <= ${N} order by id`);
-      const eagerRT = db.roundTrips - before2;
-      expect(eagerRT).toBeGreaterThan(lazyRT * 1.5);
+      const eagerRT = db.roundTrips - before3;
+      expect(eagerRT).toBeGreaterThan(lazyUntouchedRT);
     });
   });
 

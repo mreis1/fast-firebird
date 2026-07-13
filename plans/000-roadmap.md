@@ -166,16 +166,19 @@ only when API surface stabilizes (avoid premature package fragmentation).
    decode to UTC-instant JS `Date`s (instant exact, zone id dropped; verified:
    09:30 America/New_York → 13:30Z). Apps that must round-trip the *zone*
    need a `{date, zone}` value or Temporal ZonedDateTime once stable in Node.
-3. **Cross-blob pipelining** — per-segment pipelining shipped (32-deep window);
-   the next WAN win is overlapping blob open/read/close ACROSS rows on one
-   connection. Field data (2026-07-11): 100×1.7 MB fetch runs at 10 MB/s on a
-   44 MB/s path — the gap is ~2–3 RTTs of per-blob open/close/drain that could
-   overlap with the previous blob's transfer. Two halves, one wire scheduler:
-   (a) automatic overlap for eager batch materialization; (b) opt-in
-   `blobReadAhead` for lazy `queryStream` loops (prefetch the next rows' blobs
-   into a bounded buffer while the app writes the current one to disk).
-   Companion: FB 5.0.2+ protocol-level inline blobs (`op_inline_blob` — small
-   blobs ride with the row, zero extra RTs) would make small blobs free on FB5.
+~~3. Cross-blob pipelining~~ — SHIPPED 2026-07-13, both halves:
+   (a) eager batch materialization overlaps open/read/close across blobs
+   automatically (`readBlobs`: global 32-deep window across blobs, FIFO
+   pending queue, in-order close descriptors, batched flushes, per-blob cap
+   ramp; measured 30 ms RTT: 48→21 ms/blob, <1 RTT/blob); (b) opt-in
+   `blobReadAhead` (`true | depth | {columns, depth, maxBytes}`, per-query or
+   connection default) prefetches upcoming lazy blobs in bounded op-lock
+   slices during `queryStream` (exporter loop 136→82 ms/row at 30 ms RTT).
+   Remaining follow-ups: deepen the prefetcher (overlap next blob's open with
+   the current prefetch), and an explicit `prefetchBlobs(handles)` bulk helper
+   for buffered-lazy access patterns. Companion still open: FB 5.0.2+
+   protocol-level inline blobs (`op_inline_blob`) would make small blobs free
+   on FB5.
 4. **Per-column blob mode** — `blobs: {default:'eager', lazy:['BLOB1']}` (and
    the inverse): name specific columns. The subtype shorthand shipped
    2026-07-13 (`'lazy-binary'` / `'lazy-text'` — RowMapper decides per column
