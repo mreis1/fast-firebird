@@ -82,6 +82,8 @@ export class Blob {
   /**
    * Stream the blob in backpressured chunks (one op_get_segment per pull).
    * One-shot: consume once. Prefer this for large blobs to avoid buffering.
+   * Abandoning the stream early (`destroy()`, `break` out of for-await, or an
+   * error) closes the server-side blob handle — nothing leaks until tx end.
    */
   stream(opts: { chunkSize?: number } = {}): Readable {
     this.assertAlive();
@@ -100,12 +102,14 @@ export class Blob {
       pulling = true;
       void scope
         .lock(async () => {
+          if (finished) return null; // destroyed while queued for the op-lock
           if (!scope.isAlive()) throw new FirebirdBlobError('blob stream used after its transaction closed');
           if (handle === null) handle = await openBlob(scope.wire, scope.txHandle, id);
           return getBlobSegment(scope.wire, handle, chunkSize);
         })
         .then((seg) => {
           pulling = false;
+          if (!seg || finished) return; // destroy() owns the handle close now
           if (seg.eof) {
             finished = true;
             if (seg.data.length > 0) readable.push(seg.data);
@@ -125,6 +129,21 @@ export class Blob {
     return new Readable({
       read(): void {
         pull(this);
+      },
+      // Early destroy (explicit, error, or breaking out of for-await): close
+      // the server-side handle instead of leaking it until the tx ends. The
+      // close rides the op-lock, so it serializes after any in-flight pull.
+      destroy(err, cb): void {
+        const abandoned = !finished;
+        finished = true;
+        if (abandoned) {
+          void scope
+            .lock(async () => {
+              if (handle !== null && scope.isAlive()) closeBlobDeferred(scope.wire, handle);
+            })
+            .catch(() => void 0);
+        }
+        cb(err);
       },
     });
   }

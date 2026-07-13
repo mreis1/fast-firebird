@@ -14,6 +14,12 @@ export interface ServerCfg {
   connected?: boolean;
   /** Client requests zlib wire compression (server needs WireCompression=true). */
   wireCompression?: boolean;
+  /** Connection charset (lc_ctype), e.g. NONE, UTF8, WIN1252. */
+  charset?: string;
+  /** Transcoder for CHARSET NONE bytes (iconv-lite name, e.g. win1252). */
+  charsetNoneEncoding?: string;
+  /** SQL role sent at attach, e.g. RDB$ADMIN. */
+  role?: string;
 }
 
 /** Lock-wait mode: undefined = engine default, true = wait, false = nowait, number = wait seconds. */
@@ -122,7 +128,7 @@ export const api = {
   addServer: (cfg: Partial<ServerCfg> & { password?: string }) => json<{ server: ServerCfg }>('/api/servers', cfg),
   deleteServer: (id: string) => json<{ removed: string }>(`/api/servers/${id}`, undefined, 'DELETE'),
   connectServer: (id: string) => json<{ id: string; connected: boolean }>(`/api/servers/${id}/connect`, {}),
-  updateServer: (id: string, patch: { wireCompression?: boolean }) =>
+  updateServer: (id: string, patch: { wireCompression?: boolean; charset?: string; charsetNoneEncoding?: string; role?: string }) =>
     json<{ server: ServerCfg }>(`/api/servers/${id}/config`, patch),
   disconnectServer: (id: string) => json<{ id: string; connected: boolean }>(`/api/servers/${id}/disconnect`, {}),
   info: (id: string) => json<ServerInfo>(`/api/servers/${id}/info`),

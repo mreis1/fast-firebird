@@ -23,6 +23,15 @@ export interface ServerConfig {
    * matrix does). Applied on (re)connect.
    */
   wireCompression?: boolean;
+  /** Connection charset (lc_ctype). Default NONE — the legacy-db demo scenario. */
+  charset?: string;
+  /**
+   * How CHARSET NONE bytes are decoded/encoded (iconv-lite name). Only used
+   * when charset is NONE. Default win1252 — the classic legacy-Delphi preset.
+   */
+  charsetNoneEncoding?: string;
+  /** SQL role sent at attach (DPB), e.g. RDB$ADMIN. */
+  role?: string;
 }
 
 export interface ServerState {
@@ -65,14 +74,17 @@ export function addServer(cfg: Omit<ServerConfig, 'id'> & { id?: string }): Serv
 
 /** The one place demo connection options are built — every lane uses this. */
 export function connectOptsFor(config: ServerConfig) {
+  const charset = (config.charset ?? 'NONE').toUpperCase();
   return {
     host: config.host,
     port: config.port,
     database: config.database,
     user: config.user,
     password: config.password,
-    encoding: 'NONE' as const,
-    charsetNoneEncoding: 'win1252' as const,
+    role: config.role || undefined,
+    encoding: charset,
+    // The transcoder only applies to CHARSET NONE columns/connections.
+    charsetNoneEncoding: charset === 'NONE' ? (config.charsetNoneEncoding || 'win1252') : undefined,
     wireCompression: config.wireCompression ?? false,
   };
 }
@@ -81,7 +93,7 @@ export function connectOptsFor(config: ServerConfig) {
  * Patch a server's config (e.g. toggle wire compression) and tear down its
  * live state — handshake-time settings only apply on the next connect.
  */
-export async function updateServerConfig(id: string, patch: Partial<Pick<ServerConfig, 'wireCompression' | 'label'>>): Promise<ServerConfig> {
+export async function updateServerConfig(id: string, patch: Partial<Pick<ServerConfig, 'wireCompression' | 'label' | 'charset' | 'charsetNoneEncoding' | 'role'>>): Promise<ServerConfig> {
   const config = configs.get(id);
   if (!config) throw new Error(`Unknown server '${id}'`);
   Object.assign(config, patch);
@@ -159,7 +171,7 @@ export async function getServer(id: string): Promise<ServerState> {
     state.drizzle = drizzle(state.drizzleAtt);
     state.ext = createFirebirdManager({
       name: `demo-${id}`,
-      driver: { attach: { host: config.host, port: config.port, database: config.database, user: config.user, password: config.password, encoding: 'NONE', wireCompression: config.wireCompression ?? false } },
+      driver: { attach: { host: config.host, port: config.port, database: config.database, user: config.user, password: config.password, role: connectOpts.role, encoding: connectOpts.encoding, charsetNoneEncoding: connectOpts.charsetNoneEncoding, wireCompression: config.wireCompression ?? false } },
       pool: { min: 1, max: 4, sanitizeOnRelease: false },
     });
   })().then(resolveReady, rejectReady);

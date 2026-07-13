@@ -44,11 +44,12 @@ export function App() {
   const activeLabel = servers.find((s) => s.id === active)?.label ?? active;
   /** Bumped when a server's handshake config changes — remounts panels so they reconnect. */
   const [nonce, setNonce] = useState(0);
-  const toggleCompression = async (want: boolean) => {
-    const { server } = await api.updateServer(active, { wireCompression: want });
+  const updateConfig = async (patch: { wireCompression?: boolean; charset?: string; charsetNoneEncoding?: string }) => {
+    const { server } = await api.updateServer(active, patch);
     setServers((prev) => prev.map((s) => (s.id === server.id ? server : s)));
     setNonce((n) => n + 1); // config applies on reconnect — remount all panels
   };
+  const toggleCompression = (want: boolean) => updateConfig({ wireCompression: want });
 
   return (
     <div className="app">
@@ -113,7 +114,7 @@ export function App() {
         </div>
       ) : (
         <div className="grid">
-          <InfoPanel key={`info-${active}-${nonce}`} id={active} onDisconnect={() => disconnect(active)} onToggleCompression={toggleCompression} />
+          <InfoPanel key={`info-${active}-${nonce}`} id={active} onDisconnect={() => disconnect(active)} onToggleCompression={toggleCompression} onUpdateConfig={updateConfig} />
           <PoolPanel key={`pool-${active}-${nonce}`} id={active} />
           <QueryPanel key={`q-${active}`} id={active} />
           <FeaturesPanel key={`ft-${active}`} id={active} />
@@ -132,9 +133,66 @@ export function App() {
   );
 }
 
+/** Connection charsets offered by the picker (any lc_ctype works via custom servers). */
+const CHARSETS = ['NONE', 'UTF8', 'WIN1252', 'ISO8859_1', 'WIN1250', 'WIN1251'];
+/** One-shot transcoder presets for CHARSET NONE bytes (iconv-lite names). */
+const NONE_PRESETS = ['win1252', 'latin1', 'cp1250', 'cp1251', 'utf8'];
+
+/**
+ * Charset picker: connection charset + (for NONE) how raw bytes are
+ * transcoded — preset encodings or a custom iconv-lite name.
+ */
+function CharsetPicker({ charset, noneEncoding, onChange }: {
+  charset: string;
+  noneEncoding: string;
+  onChange: (charset: string, noneEncoding: string) => void;
+}) {
+  const [customMode, setCustomMode] = useState(!NONE_PRESETS.includes(noneEncoding));
+  return (
+    <>
+      <select
+        style={{ maxWidth: 110 }}
+        title="Connection charset (lc_ctype). NONE = raw bytes, decoded client-side by the transcoder."
+        value={charset}
+        onChange={(e) => onChange(e.target.value, noneEncoding)}
+      >
+        {CHARSETS.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      {charset === 'NONE' && (
+        <span className="unit" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
+          ⇢ decode as
+          {customMode ? (
+            <input
+              style={{ maxWidth: 110 }}
+              placeholder="iconv name (cp437…)"
+              value={noneEncoding}
+              onChange={(e) => onChange(charset, e.target.value)}
+            />
+          ) : (
+            <select
+              style={{ maxWidth: 110 }}
+              title="Transcoder for CHARSET NONE bytes — the legacy-database escape hatch (win1252 covers €, smart quotes, em dashes)."
+              value={noneEncoding}
+              onChange={(e) => {
+                if (e.target.value === '__custom') setCustomMode(true);
+                else onChange(charset, e.target.value);
+              }}
+            >
+              {NONE_PRESETS.map((p) => <option key={p} value={p}>{p}</option>)}
+              <option value="__custom">custom…</option>
+            </select>
+          )}
+        </span>
+      )}
+    </>
+  );
+}
+
 function AddServer({ onAdd }: { onAdd: (cfg: any) => void }) {
   const [f, setF] = useState({ label: 'Custom', host: '127.0.0.1', port: 3050, database: '', user: 'SYSDBA', password: 'masterkey' });
   const [zlib, setZlib] = useState(false);
+  const [cs, setCs] = useState({ charset: 'NONE', enc: 'win1252' });
+  const [role, setRole] = useState('');
   const set = (k: string) => (e: any) => setF({ ...f, [k]: e.target.value });
   return (
     <div className="card wide" style={{ marginBottom: 16 }}>
@@ -146,23 +204,33 @@ function AddServer({ onAdd }: { onAdd: (cfg: any) => void }) {
         <input style={{ flex: 1, minWidth: 200 }} placeholder="/path/to/db.fdb" value={f.database} onChange={set('database')} />
         <input style={{ maxWidth: 110 }} placeholder="user" value={f.user} onChange={set('user')} />
         <input style={{ maxWidth: 130 }} placeholder="password" type="password" value={f.password} onChange={set('password')} />
+        <input style={{ maxWidth: 110 }} placeholder="role (optional)" value={role} onChange={(e) => setRole(e.target.value)} title="SQL role sent at attach (DPB), e.g. RDB$ADMIN" />
+        <CharsetPicker charset={cs.charset} noneEncoding={cs.enc} onChange={(charset, enc) => setCs({ charset, enc })} />
         <label className="unit" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
           <input type="checkbox" style={{ width: 'auto' }} checked={zlib} onChange={(e) => setZlib(e.target.checked)} />
           zlib compression
         </label>
-        <button className="btn" onClick={() => onAdd({ ...f, port: Number(f.port), wireCompression: zlib })}>Connect</button>
+        <button className="btn" onClick={() => onAdd({ ...f, port: Number(f.port), wireCompression: zlib, charset: cs.charset, charsetNoneEncoding: cs.enc, role: role.trim() || undefined })}>Connect</button>
       </div>
       <div className="note">
         Read/write, wide open — points at whatever database you give it. Compression needs the server to allow it
-        (<code>WireCompression = true</code> in firebird.conf).
+        (<code>WireCompression = true</code> in firebird.conf). CHARSET NONE + a transcoder is the legacy-database
+        mode: raw bytes decoded client-side (win1252 covers €, smart quotes, em dashes).
       </div>
     </div>
   );
 }
 
-function InfoPanel({ id, onDisconnect, onToggleCompression }: { id: string; onDisconnect: () => void; onToggleCompression: (want: boolean) => void }) {
+function InfoPanel({ id, onDisconnect, onToggleCompression, onUpdateConfig }: {
+  id: string;
+  onDisconnect: () => void;
+  onToggleCompression: (want: boolean) => void;
+  onUpdateConfig: (patch: { charset?: string; charsetNoneEncoding?: string; role?: string }) => void;
+}) {
   const [info, setInfo] = useState<ServerInfo | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  /** Non-null while the connect-settings editor is open (draft values). */
+  const [csEdit, setCsEdit] = useState<{ charset: string; enc: string; role: string } | null>(null);
   useEffect(() => {
     setInfo(null);
     setErr(null);
@@ -202,6 +270,46 @@ function InfoPanel({ id, onDisconnect, onToggleCompression }: { id: string; onDi
               {info.config.wireCompression ? 'disable' : 'enable'} & reconnect
             </a>
           </span>
+          <b>charset</b>
+          <span>
+            {csEdit ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <CharsetPicker charset={csEdit.charset} noneEncoding={csEdit.enc} onChange={(charset, enc) => setCsEdit({ ...csEdit, charset, enc })} />
+                <input
+                  style={{ maxWidth: 110 }}
+                  placeholder="role (optional)"
+                  title="SQL role sent at attach (DPB), e.g. RDB$ADMIN"
+                  value={csEdit.role}
+                  onChange={(e) => setCsEdit({ ...csEdit, role: e.target.value })}
+                />
+                <a
+                  style={{ color: 'var(--accent-2)', cursor: 'pointer', fontSize: 11 }}
+                  onClick={() => onUpdateConfig({ charset: csEdit.charset, charsetNoneEncoding: csEdit.enc, role: csEdit.role.trim() })}
+                >
+                  apply & reconnect
+                </a>
+                <a style={{ color: 'var(--muted)', cursor: 'pointer', fontSize: 11 }} onClick={() => setCsEdit(null)}>cancel</a>
+              </span>
+            ) : (
+              <>
+                {info.config.charset ?? 'NONE'}
+                {(info.config.charset ?? 'NONE') === 'NONE' && (
+                  <span className="badge on" style={{ marginLeft: 6 }} title="CHARSET NONE bytes are transcoded client-side with this encoding.">
+                    ⇢ {info.config.charsetNoneEncoding ?? 'win1252'}
+                  </span>
+                )}{' '}
+                <a
+                  style={{ color: 'var(--accent-2)', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}
+                  title="Charset and role are connect-time (DPB) settings — changing them reconnects this server."
+                  onClick={() => setCsEdit({ charset: info.config.charset ?? 'NONE', enc: info.config.charsetNoneEncoding ?? 'win1252', role: info.config.role ?? '' })}
+                >
+                  change
+                </a>
+              </>
+            )}
+          </span>
+          <b>role</b>
+          <span>{info.config.role || '—'}</span>
           <b>database</b>
           <span style={{ fontSize: 11 }}>{info.config.database}</span>
         </div>

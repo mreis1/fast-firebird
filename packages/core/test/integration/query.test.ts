@@ -31,6 +31,30 @@ describe.each(FB_SERVERS)('queries on Firebird $version', ({ port, version }) =>
     await db?.dropDatabase();
   });
 
+  it('exposes column metadata (headers) on run()', async () => {
+    const res = await db.run(`select id, name as label, notes, price from ${table} where 1=0`);
+    expect(res.columns.map((c) => c.name)).toEqual(['ID', 'LABEL', 'NOTES', 'PRICE']);
+    const by = Object.fromEntries(res.columns.map((c) => [c.name, c]));
+    expect(by.ID).toMatchObject({ field: 'ID', relation: table, type: 'INTEGER', nullable: false });
+    expect(by.LABEL!.field).toBe('NAME'); // alias doesn't hide the source field
+    expect(by.NOTES!.type).toBe('BLOB SUB_TYPE TEXT');
+    expect(by.PRICE!.type).toBe('NUMERIC');
+  });
+
+  it('column metadata names select * output, incl. rowMode array and exclude', async () => {
+    const arr = await db.run(`select * from ${table} where 1=0`, [], { rowMode: 'array' });
+    expect(arr.columns.map((c) => c.name)).toEqual([
+      'ID', 'NAME', 'FIXED', 'QTY', 'PRICE', 'RATIO', 'FLAG', 'BORN', 'WAKE', 'CREATED', 'NOTES', 'PAYLOAD',
+    ]);
+    // Positional headers line up with array cells.
+    const excl = await db.run(`select id, name, payload from ${table} where 1=0`, [], { exclude: ['payload'] });
+    expect(excl.columns.map((c) => c.name)).toEqual(['ID', 'NAME']);
+    // Computed expressions have no relation/field, but keep their alias.
+    const expr = await db.run('select 1 + 1 as total from rdb$database');
+    expect(expr.columns[0]!.name).toBe('TOTAL');
+    expect(expr.columns[0]!.relation).toBeFalsy();
+  });
+
   it('selects simple expressions', async () => {
     const rows = await db.query('select 1 as a, cast(2 as bigint) as b from rdb$database');
     expect(rows).toEqual([{ A: 1, B: 2 }]);

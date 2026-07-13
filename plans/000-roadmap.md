@@ -143,6 +143,17 @@ only when API surface stabilizes (avoid premature package fragmentation).
 - [ ] Benchmarks expansion: tc/toxiproxy latency matrix, blob throughput, charset overhead
 - [ ] Docs site / README polish
 
+## Design decisions (locked)
+
+- **Blobs are EAGER by default** — final verdict 2026-07-13. Rationale:
+  "SELECT gives me values" is the near-universal driver expectation, and lazy
+  leaks transaction-lifetime concerns into ordinary code. Flipping the default
+  would also break every existing consumer (compat shim, drizzle, demo) and
+  make `db.query` vs `tx.query` return different shapes. Lazy stays one option
+  away: `connect({blobs:'lazy'})` connection-wide, or `{blobs:'lazy'}`
+  per query/stream (auto-tx `db.query` rejects lazy by design — handles would
+  die with the hidden transaction).
+
 ## Deferred backlog (explicitly parked, in rough priority order)
 
 1. **`SELECT *` projection rewrite** (`expandStar`, `plans/projection.md`) —
@@ -157,22 +168,38 @@ only when API surface stabilizes (avoid premature package fragmentation).
    the next WAN win is overlapping blob open/read/close ACROSS rows on one
    connection. Field data (2026-07-11): 100×1.7 MB fetch runs at 10 MB/s on a
    44 MB/s path — the gap is ~2–3 RTTs of per-blob open/close/drain that could
-   overlap with the previous blob's transfer.
-4. **Blob write streaming** — `Writable`/AsyncIterable input for blob params
+   overlap with the previous blob's transfer. Two halves, one wire scheduler:
+   (a) automatic overlap for eager batch materialization; (b) opt-in
+   `blobReadAhead` for lazy `queryStream` loops (prefetch the next rows' blobs
+   into a bounded buffer while the app writes the current one to disk).
+   Companion: FB 5.0.2+ protocol-level inline blobs (`op_inline_blob` — small
+   blobs ride with the row, zero extra RTs) would make small blobs free on FB5.
+4. **Per-column blob mode** — `blobs: {default:'eager', lazy:['BLOB1']}` (and
+   the inverse): memo columns eager, file columns lazy in one query. RowMapper
+   is already per-column; small change.
+5. **Blob head/resume cursor** — `blob.head(n)` for magic-number sniffing that
+   KEEPS the handle open at its position, so a later `.stream()`/`.buffer()`
+   resumes instead of re-transferring (segmented blobs are forward-only; a kept
+   cursor is the right primitive). `stream()` abandon-close shipped 2026-07-13.
+6. **Blob write streaming** — `Writable`/AsyncIterable input for blob params
    (reads already stream via `Blob.stream()`).
-5. **core `autoUpgradeReadOnly`** — opt-in RO→RW transaction auto-upgrade with
+7. **core `autoUpgradeReadOnly`** — opt-in RO→RW transaction auto-upgrade with
    statement replay in core's own API (the nf2-ext compat layer already does
    this at its level).
-6. **Drizzle depth**: nested transactions (savepoints — adapter currently
+8. **Small DX helpers** — per-query `fetchSize` override in `QueryOptions`;
+   `queryOne()` (single-row-or-undefined); typed rows `query<T>()`;
+   `Symbol.asyncDispose` (`await using`) on Attachment/Transaction/Pool;
+   `blob.toFile(path)` / documented fs-pipeline recipe.
+9. **Drizzle depth**: nested transactions (savepoints — adapter currently
    throws), relational query API, drizzle-kit migrations, RDB$ introspection →
    schema generation.
-7. **Services actions**: backup/restore (gbak) via service start+output —
+10. **Services actions**: backup/restore (gbak) via service start+output —
    plumbing (SPB, collectOutput) already exists.
-8. **DECFLOAT special values** — Inf/NaN decode; encode rejects them (finite
+11. **DECFLOAT special values** — Inf/NaN decode; encode rejects them (finite
    round-trip complete).
-9. **Protocol 10–12 / FB 2.5 legacy support** — EOL upstream; only if a
+12. **Protocol 10–12 / FB 2.5 legacy support** — EOL upstream; only if a
    migration demands it.
-10. **Native/WASM acceleration** (SIMD UTF-8, decimal128) — only if benchmarks
+13. **Native/WASM acceleration** (SIMD UTF-8, decimal128) — only if benchmarks
    prove the need (`plans/architecture.md`).
 
 ## Testing strategy
@@ -181,12 +208,17 @@ only when API surface stabilizes (avoid premature package fragmentation).
   strictly isolated per `plans/docker-safety.md`.
 - Regression: `CHARSET NONE` + win1252 round-trips (€, smart quotes, em dash).
 
-## Current status (2026-07-10)
+## Current status (2026-07-13)
 M0–M5.5 complete. M6 essentially delivered: Drizzle adapter (30 tests),
 node-firebird2-ext swap (branch `fast-firebird`, 9/9), live demo dashboard with
-feature explorer + custom benchmark, brand assets (SVG/PNG/ICO). DECFLOAT now
-fully decoded AND encoded (target-aware params) — the last placeholder type; the
-read+write type system is complete for finite values. Core: 340+ tests green.
-Remaining active M6 work: publish `@fast-firebird/core`, CI, benchmark
-expansion, docs polish. Parked work lives in the Deferred backlog above.
-See `diary/2026-07-09.md` (sessions 9–14) and `diary/2026-07-10.md`.
+feature explorer + custom benchmark + connection lifecycle/tx-wait/compression/
+charset+role pickers, brand assets (SVG/PNG/ICO). DECFLOAT fully decoded AND
+encoded — the read+write type system is complete for finite values. Recent
+core additions: blob segment pipelining (32-deep; the 2.8→59 MB/s remote-fetch
+arc, see diary 07-10/11), Legacy_Auth server-initiated fallback, commit-leak
+fix, `ColumnInfo` result metadata (`QueryResult.columns`), abandoned-blob-
+stream close. Blobs stay eager by default (see Design decisions). Core: 379
+tests green on FB3/4/5. Remaining active M6 work: publish
+`@fast-firebird/core`, CI, benchmark expansion, docs polish. Parked work lives
+in the Deferred backlog above. See `diary/2026-07-11.md` and
+`diary/2026-07-13.md`.

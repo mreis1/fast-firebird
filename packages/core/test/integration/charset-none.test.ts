@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import iconv from 'iconv-lite';
-import { connect, createDatabase, type Attachment } from '../../src/index.js';
+import { connect, createDatabase, type Attachment, type Blob } from '../../src/index.js';
 import { FB_BASE, FB_SERVERS, HOOK_TIMEOUT } from './env.js';
 
 /**
@@ -83,6 +83,35 @@ describe.each(FB_SERVERS)('CHARSET NONE legacy win1252 on Firebird $version', ({
       await db.execute('insert into history (id, memo) values (?,?)', [2, 'adapter: €—”']);
       const [r] = await db.query('select memo from history where id = 2');
       expect(r!.MEMO).toBe('adapter: €—”');
+    } finally {
+      await db.disconnect();
+    }
+  });
+
+  it('decodes a lazy text blob (memo) through charsetNoneEncoding', async () => {
+    const db = await connectLegacy();
+    try {
+      await db.transaction(async (tx) => {
+        const [r] = await tx.query('select long_memo from history where id = 1', [], { blobs: 'lazy' });
+        // Blob.text() must use the same win1252 codec the eager path uses.
+        expect(await (r!.LONG_MEMO as Blob).text()).toBe(WIN1252_ONLY);
+      });
+    } finally {
+      await db.disconnect();
+    }
+  });
+
+  it('supports charsetOverrides on a text blob column', async () => {
+    const db = await connect({
+      ...FB_BASE,
+      port,
+      database: dbPath,
+      charset: 'NONE',
+      charsetOverrides: { 'HISTORY.LONG_MEMO': 'win1252' },
+    });
+    try {
+      const [r] = await db.query('select long_memo from history where id = 1');
+      expect(r!.LONG_MEMO).toBe(WIN1252_ONLY);
     } finally {
       await db.disconnect();
     }

@@ -22,10 +22,33 @@ import type { ResolvedOptions } from './options.js';
 
 export type Row = Record<string, unknown>;
 
+/** One output column of a statement run, in row/position order. */
+export interface ColumnInfo {
+  /**
+   * The key this column has in result rows: alias if the query set one, else
+   * the field name (case per `lowercaseKeys`). In `rowMode:'array'` this is
+   * the positional header for the same index.
+   */
+  name: string;
+  /** Underlying field name from the server describe (aliases don't hide it). */
+  field?: string;
+  /** Source table/view; undefined for computed expressions. */
+  relation?: string;
+  /** Friendly SQL type name: VARCHAR, INTEGER, BLOB SUB_TYPE TEXT, … */
+  type: string;
+  nullable: boolean;
+}
+
 export interface QueryResult {
   rows: Row[];
   /** Affected-record counts for DML; zeros for plain selects. */
   rowsAffected: number;
+  /**
+   * Columns exactly as they appear in `rows`: every column positionally in
+   * array mode, the kept ones (after `only`/`exclude`) in object mode.
+   * Answers "what did `select *` actually return?".
+   */
+  columns: ColumnInfo[];
 }
 
 /** Per-statement options. */
@@ -108,6 +131,42 @@ function isBlobType(t: number): boolean {
   return t === SqlType.BLOB;
 }
 
+const SQL_TYPE_NAMES: Record<number, string> = {
+  [SqlType.TEXT]: 'CHAR',
+  [SqlType.VARYING]: 'VARCHAR',
+  [SqlType.SHORT]: 'SMALLINT',
+  [SqlType.LONG]: 'INTEGER',
+  [SqlType.FLOAT]: 'FLOAT',
+  [SqlType.DOUBLE]: 'DOUBLE PRECISION',
+  [SqlType.D_FLOAT]: 'DOUBLE PRECISION',
+  [SqlType.TIMESTAMP]: 'TIMESTAMP',
+  [SqlType.BLOB]: 'BLOB',
+  [SqlType.ARRAY]: 'ARRAY',
+  [SqlType.QUAD]: 'QUAD',
+  [SqlType.TYPE_TIME]: 'TIME',
+  [SqlType.TYPE_DATE]: 'DATE',
+  [SqlType.INT64]: 'BIGINT',
+  [SqlType.INT128]: 'INT128',
+  [SqlType.TIMESTAMP_TZ]: 'TIMESTAMP WITH TIME ZONE',
+  [SqlType.TIMESTAMP_TZ_EX]: 'TIMESTAMP WITH TIME ZONE',
+  [SqlType.TIME_TZ]: 'TIME WITH TIME ZONE',
+  [SqlType.TIME_TZ_EX]: 'TIME WITH TIME ZONE',
+  [SqlType.DEC16]: 'DECFLOAT(16)',
+  [SqlType.DEC34]: 'DECFLOAT(34)',
+  [SqlType.BOOLEAN]: 'BOOLEAN',
+  [SqlType.NULL]: 'NULL',
+};
+
+/** Friendly SQL type name for a described column. */
+function sqlTypeName(d: SqlVarDesc): string {
+  // Scaled integers are NUMERIC/DECIMAL on the wire (subType 2 = DECIMAL).
+  if (d.scale < 0 && (d.type === SqlType.SHORT || d.type === SqlType.LONG || d.type === SqlType.INT64 || d.type === SqlType.INT128)) {
+    return d.subType === 2 ? 'DECIMAL' : 'NUMERIC';
+  }
+  if (d.type === SqlType.BLOB && d.subType === 1) return 'BLOB SUB_TYPE TEXT';
+  return SQL_TYPE_NAMES[d.type] ?? `SQL_TYPE_${d.type}`;
+}
+
 /**
  * Maps raw row-arrays (with BlobRef cells) to shaped result objects, applying
  * `exclude`/`only` and eager/lazy blob handling. Built once per statement run.
@@ -120,6 +179,8 @@ class RowMapper {
   /** Per column: text codec for a subtype-1 (text) blob, else null. */
   private readonly blobCodec: (TextCodec | null)[];
   readonly hasKeptEagerBlobs: boolean;
+  /** Kept output columns, in the order they appear in shaped rows. */
+  readonly columns: ColumnInfo[];
 
   constructor(
     private readonly ctx: SessionContext,
@@ -145,6 +206,14 @@ class RowMapper {
       return kept ? (lc ? lower : rawName) : null;
     });
     this.hasKeptEagerBlobs = keptEagerBlobs;
+
+    this.columns = [];
+    for (let i = 0; i < outputs.length; i++) {
+      const key = this.keys[i];
+      if (key == null) continue;
+      const d = outputs[i]!;
+      this.columns.push({ name: key, field: d.field, relation: d.relation, type: sqlTypeName(d), nullable: d.nullable });
+    }
 
     this.scope =
       this.lazy && outputs.some((d, i) => isBlobType(d.type) && this.keys[i] !== null)
@@ -266,7 +335,7 @@ export async function executePrepared(
     freeStatement(wire, info.handle, FreeStatement.DSQL_close);
   }
 
-  return { rows: rows.map((r) => mapper.shape(r)), rowsAffected };
+  return { rows: rows.map((r) => mapper.shape(r)), rowsAffected, columns: mapper.columns };
 }
 
 /** Validate arity, upload blob params, and build the text encoder. */

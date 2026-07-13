@@ -20,8 +20,20 @@ describe.each(FB_SERVERS)('lazy blobs on Firebird $version', ({ port, version })
           `memo €-${i}`,
         ]);
       }
+      // Big blob for abandoned-stream tests: must dwarf the Readable's 16KB
+      // highWaterMark so an early break happens far from EOF.
+      await tx.execute(`insert into ${t} (id, b1) values (?, ?)`, [500, Buffer.alloc(100_000, 0x42)]);
     });
   }, HOOK_TIMEOUT);
+
+  /** Runtime peek at the wire's pending deferred-response counter. */
+  const deferredCount = () => (db as unknown as { wire: { deferredResponses: number } }).wire.deferredResponses;
+
+  /** Wait until `cond()` holds (the deferred close rides the async op-lock). */
+  async function until(cond: () => boolean, ms = 500): Promise<void> {
+    const t0 = Date.now();
+    while (!cond() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 5));
+  }
 
   afterAll(async () => {
     await db?.dropDatabase();
@@ -31,7 +43,7 @@ describe.each(FB_SERVERS)('lazy blobs on Firebird $version', ({ port, version })
     await db.transaction(async (tx) => {
       const before = db.roundTrips;
       let read = 0;
-      for await (const row of tx.queryStream(`select id, b1, b2, memo from ${t} order by id`, [], { blobs: 'lazy' })) {
+      for await (const row of tx.queryStream(`select id, b1, b2, memo from ${t} where id <= ${N} order by id`, [], { blobs: 'lazy' })) {
         expect(typeof (row.MEMO as Blob).text).toBe('function'); // handle, not value
         expect(typeof (row.B1 as Blob).buffer).toBe('function');
         const memo = await (row.MEMO as Blob).text();
@@ -44,7 +56,7 @@ describe.each(FB_SERVERS)('lazy blobs on Firebird $version', ({ port, version })
 
       // Eager reads all four blob columns → materially more round trips.
       const before2 = db.roundTrips;
-      await tx.query(`select id, b1, b2, memo from ${t} order by id`);
+      await tx.query(`select id, b1, b2, memo from ${t} where id <= ${N} order by id`);
       const eagerRT = db.roundTrips - before2;
       expect(eagerRT).toBeGreaterThan(lazyRT * 1.5);
     });
@@ -80,6 +92,71 @@ describe.each(FB_SERVERS)('lazy blobs on Firebird $version', ({ port, version })
         expect(Buffer.concat(chunks).toString()).toBe('B2-7');
       }
     });
+  });
+
+  it('abandoning a stream mid-read closes the server handle (magic-number pattern)', async () => {
+    await db.transaction(async (tx) => {
+      const [row] = await tx.query(`select b1 from ${t} where id = 500`, [], { blobs: 'lazy' });
+      const blob = row!.B1 as Blob;
+
+      // Read just the head (e.g. sniffing a file's magic number), then bail.
+      let head: Buffer | null = null;
+      for await (const chunk of blob.stream({ chunkSize: 4096 })) {
+        head = chunk as Buffer;
+        break; // for-await break destroys the Readable mid-blob
+      }
+      expect(head!.length).toBeGreaterThan(0);
+      expect(head![0]).toBe(0x42);
+
+      // destroy() must queue exactly one deferred op_close_blob. The stream's
+      // openBlob flush consumed every previously pending deferred response, so
+      // mid-stream the counter is 0 and the abandon-close brings it to exactly
+      // 1 (it rides the async op-lock, so poll briefly).
+      await until(() => deferredCount() === 1);
+      expect(deferredCount()).toBe(1);
+
+      // The wire stays in sync: a full re-read and a plain query both work
+      // (these also consume the deferred close's response FIFO).
+      const full = await blob.buffer();
+      expect(full.length).toBe(100_000);
+      const [r2] = await tx.query(`select id from ${t} where id = 500`);
+      expect(r2!.ID).toBe(500);
+    });
+  });
+
+  it('destroying an unread stream is a no-op (no handle opened, no close sent)', async () => {
+    await db.transaction(async (tx) => {
+      const [row] = await tx.query(`select b1 from ${t} where id = 500`, [], { blobs: 'lazy' });
+      const blob = row!.B1 as Blob;
+      const before = deferredCount();
+      const rs = blob.stream();
+      rs.destroy();
+      await new Promise((r) => setTimeout(r, 25));
+      expect(deferredCount()).toBe(before); // nothing was opened → nothing to close
+      expect((await blob.buffer()).length).toBe(100_000); // connection unaffected
+    });
+  });
+
+  it('a stream error path also closes the handle and keeps the connection usable', async () => {
+    let rs: Readable | undefined;
+    await db.transaction(async (tx) => {
+      const [row] = await tx.query(`select b1 from ${t} where id = 500`, [], { blobs: 'lazy' });
+      rs = (row!.B1 as Blob).stream({ chunkSize: 4096 });
+      // Start it, then let the tx close underneath — the next pull must
+      // destroy the stream with FirebirdBlobError, not hang or desync.
+      await new Promise<void>((resolve, reject) => {
+        rs!.once('data', () => resolve());
+        rs!.once('error', reject);
+      });
+      rs!.pause();
+    });
+    const err = await new Promise<Error>((resolve) => {
+      rs!.once('error', resolve);
+      rs!.resume();
+    });
+    expect(err).toBeInstanceOf(FirebirdBlobError);
+    const [r] = await db.query(`select count(*) as C from ${t}`);
+    expect(Number(r!.C)).toBeGreaterThan(0);
   });
 
   it('size() reports the blob length', async () => {

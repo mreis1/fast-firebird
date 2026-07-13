@@ -14,7 +14,7 @@ const app = Fastify({ logger: false, bodyLimit: 24 * 1024 * 1024 });
 
 /** Strip secrets before sending a server config to the browser. */
 function publicConfig(c: ServerConfig) {
-  return { id: c.id, label: c.label, host: c.host, port: c.port, database: c.database, user: c.user, version: c.version, builtin: isBuiltinServer(c.id), connected: isConnected(c.id), wireCompression: c.wireCompression ?? false };
+  return { id: c.id, label: c.label, host: c.host, port: c.port, database: c.database, user: c.user, role: c.role || undefined, version: c.version, builtin: isBuiltinServer(c.id), connected: isConnected(c.id), wireCompression: c.wireCompression ?? false, charset: (c.charset ?? 'NONE').toUpperCase(), charsetNoneEncoding: c.charsetNoneEncoding ?? 'win1252' };
 }
 
 /** Minimal SSE helper over the raw Node response. Returns send/close. */
@@ -51,12 +51,18 @@ app.delete('/api/servers/:id', async (req, reply) => {
   }
 });
 
-// Patch handshake-time settings (wire compression); applies on next connect.
+// Patch connect-time settings (wire compression, charset/transcoder); they
+// apply on the next connect, so the server state is torn down.
 app.post('/api/servers/:id/config', async (req, reply) => {
   const { id } = req.params as { id: string };
-  const { wireCompression } = req.body as { wireCompression?: boolean };
+  const { wireCompression, charset, charsetNoneEncoding, role } = req.body as { wireCompression?: boolean; charset?: string; charsetNoneEncoding?: string; role?: string };
   try {
-    const cfg = await updateServerConfig(id, { wireCompression: !!wireCompression });
+    const patch: Record<string, unknown> = {};
+    if (wireCompression !== undefined) patch.wireCompression = !!wireCompression;
+    if (charset !== undefined) patch.charset = String(charset).toUpperCase();
+    if (charsetNoneEncoding !== undefined) patch.charsetNoneEncoding = String(charsetNoneEncoding);
+    if (role !== undefined) patch.role = String(role).trim();
+    const cfg = await updateServerConfig(id, patch);
     return { server: publicConfig(cfg) };
   } catch (err) {
     reply.code(400);

@@ -10,7 +10,7 @@ export {
 } from './script/execute.js';
 export { EventListener, EventChannel } from './events/events.js';
 export { Service, connectService, type ServiceConnectOptions, type ServerInfo } from './services/service.js';
-export type { QueryResult, Row, QueryOptions } from './api/session.js';
+export type { QueryResult, Row, QueryOptions, ColumnInfo } from './api/session.js';
 export { Blob } from './api/blob.js';
 export type { TransactionOptions, IsolationLevel } from './protocol/transaction.js';
 export type { ParamValue } from './protocol/msgcodec.js';
