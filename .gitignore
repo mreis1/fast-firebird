@@ -10,3 +10,7 @@ references/
 # Local test databases / docker data
 docker/data/
 *.fdb
+
+# Editor swap files & private local notes
+*.swp
+MARCIO_NOTES.md
