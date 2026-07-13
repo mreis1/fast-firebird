@@ -118,7 +118,8 @@ only when API surface stabilizes (avoid premature package fragmentation).
       concurrent work across pooled connections, results in order. Honest note:
       lazy blob handles can't cross connections, so parallelize by running the
       *query* per partition inside `fn`, not by sharing handles. 1 test.
-- [ ] `plans/projection.md` — `SELECT *` rewrite (`expandStar`) DEFERRED/future
+- [x] `plans/projection.md` — `SELECT *` rewrite (`expandStar`) — shipped
+      2026-07-13 (alias-exact via isc_info_sql_relation_alias, self-join safe)
 
 ### M6 — Ecosystem
 - [x] Drizzle dialect + adapter (`plans/drizzle.md`) — `@fast-firebird/drizzle`:
@@ -156,10 +157,9 @@ only when API surface stabilizes (avoid premature package fragmentation).
 
 ## Deferred backlog (explicitly parked, in rough priority order)
 
-1. **`SELECT *` projection rewrite** (`expandStar`, `plans/projection.md`) —
-   rewrite `*`/`ALIAS.*`/`TABLE.*` server-side so `exclude` can skip blob
-   columns without the caller typing every column. User-requested; needs
-   alias-aware SQL analysis.
+~~1. `SELECT *` projection rewrite~~ — SHIPPED 2026-07-13, see
+   `plans/projection.md`.
+
 2. **Zone-preserving timezone types** — TIMESTAMP/TIME WITH TIME ZONE currently
    decode to UTC-instant JS `Date`s (instant exact, zone id dropped; verified:
    09:30 America/New_York → 13:30Z). Apps that must round-trip the *zone*

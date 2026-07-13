@@ -14,6 +14,8 @@ export interface SqlVarDesc {
   relation?: string;
   owner?: string;
   alias?: string;
+  /** FROM-clause alias of the source relation (isc_info_sql_relation_alias). */
+  relationAlias?: string;
 }
 
 export interface StatementDescription {
@@ -93,6 +95,7 @@ export const DESCRIBE_INFO_ITEMS = Buffer.from([
   SqlInfo.length,
   SqlInfo.field,
   SqlInfo.relation,
+  SqlInfo.relation_alias,
   SqlInfo.owner,
   SqlInfo.alias,
   SqlInfo.describe_end,
@@ -164,6 +167,9 @@ export function parseDescribe(buf: Buffer): StatementDescription {
         break;
       case SqlInfo.relation:
         current!.relation = r.readString();
+        break;
+      case SqlInfo.relation_alias:
+        current!.relationAlias = r.readString();
         break;
       case SqlInfo.owner:
         current!.owner = r.readString();

@@ -1,7 +1,21 @@
-# Projection Rewrite (`expandStar`) — DEFERRED / future
+# Projection Rewrite (`expandStar`) — SHIPPED 2026-07-13
 
-Status: **planned, not scheduled.** Captured from the M5.5 design discussion.
-Do not implement until explicitly prioritized.
+Status: **implemented** (`src/api/expand-star.ts`, hooked into
+`runStatement`/`streamRows`; 16 unit + 27 integration tests). Implementation
+notes vs. the original plan below:
+
+- Describe now requests `isc_info_sql_relation_alias` → each output column
+  carries its FROM-clause alias, so `a.*` maps exactly even in self-joins.
+  No FROM-clause parsing, no schema cache.
+- Emitted column names are ALWAYS double-quoted (dialect-3 exact match) —
+  survives lowercase/special/reserved identifiers.
+- Rewrites are cached per (sql, only, exclude) in `SessionContext.starCache`,
+  invalidated on DDL together with the statement cache.
+- Decode-time `exclude`/`only` now also match qualified `ALIAS.COL` entries
+  (RowMapper), so the two layers compose.
+- Not supported (clear errors): top-level UNION; excluding every column of a
+  star. A bare `*` mixed with other select items is rejected by Firebird
+  itself at prepare, so it never reaches the rewriter.
 
 ## Goal
 

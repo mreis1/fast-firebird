@@ -14,6 +14,7 @@ import { BlobRef, DecFloatVal, makeColumnReader, type ParamValue } from '../prot
 import { encodeDecFloat } from '../types/decfloat.js';
 import { resolveTextCodec, type TextCodec, type TextCodecOptions } from '../charset/decoder.js';
 import { StatementCache } from './statement-cache.js';
+import { expandStarSql } from './expand-star.js';
 import { Blob, type BlobScope } from './blob.js';
 import { FirebirdError } from './errors.js';
 import type { SqlVarDesc } from '../protocol/info.js';
@@ -66,6 +67,15 @@ export interface QueryOptions {
    * `QueryResult.rows` holds `unknown[]` per row.
    */
   rowMode?: 'object' | 'array';
+  /**
+   * Rewrite top-level `*` / `alias.*` / `table.*` into an explicit column
+   * list (minus `exclude`, filtered by `only`) BEFORE preparing — excluded
+   * columns are then genuinely never sent by the server, scalars included
+   * (decode-time exclude only saves blob reads). Costs one extra prepare per
+   * unique (sql, only, exclude); cached, invalidated by DDL. Emitted column
+   * names are double-quoted (dialect 3). Top-level UNION is not supported.
+   */
+  expandStar?: boolean;
 }
 
 /** A network-op serializer (Attachment.withLock). */
@@ -79,6 +89,8 @@ export interface SessionContext {
   cache: StatementCache | null;
   /** Connection op-lock; used to build deferred lazy-blob scopes. */
   lock: OpLock;
+  /** expandStar rewrite cache: (sql, only, exclude) → rewritten SQL. */
+  starCache?: Map<string, string>;
 }
 
 /** Per-run context: user query options + transaction liveness for lazy blobs. */
@@ -199,8 +211,12 @@ class RowMapper {
     this.keys = outputs.map((d, i) => {
       const rawName = d.alias || d.field || `F${i + 1}`;
       const lower = rawName.toLowerCase();
+      // Entries may be bare (`col`) or qualified by FROM alias (`t2.col`).
+      const qual = d.relationAlias ? `${d.relationAlias.toLowerCase()}.${lower}` : null;
+      const listed = (list: string[]) => list.includes(lower) || (qual !== null && list.includes(qual));
+      const excluded = exclude.has(lower) || (qual !== null && exclude.has(qual));
       // Array mode keeps every column positionally (exclude/only ignored).
-      const kept = this.arrayMode || ((!only || only.includes(lower)) && !exclude.has(lower));
+      const kept = this.arrayMode || ((!only || listed(only)) && !excluded);
       this.blobCodec[i] = isBlobType(d.type) && d.subType === 1 ? codecForDesc(d, ctx.opts, 'blob') : null;
       if (kept && isBlobType(d.type) && !this.lazy) keptEagerBlobs = true;
       return kept ? (lc ? lower : rawName) : null;
@@ -400,6 +416,30 @@ function isStaleStatementError(err: unknown): boolean {
  * Run one SQL statement, using the attachment statement cache when possible.
  * Cache hits cost a single round trip for small selects and DML.
  */
+/**
+ * Resolve the SQL to actually execute: with `expandStar`, prepare the
+ * original once (describe tells us what each `*` produces), rewrite the star
+ * items, and cache the rewrite. Must run under the connection op-lock.
+ */
+async function resolveExpandStar(ctx: SessionContext, txHandle: number, sql: string, run: RunContext): Promise<string> {
+  if (!run.query.expandStar) return sql;
+  const key = `${sql} ${(run.query.only ?? []).join(',').toLowerCase()} ${(run.query.exclude ?? []).join(',').toLowerCase()}`;
+  const hit = ctx.starCache?.get(key);
+  if (hit !== undefined) return hit;
+
+  // The original statement's describe drives the expansion. Reuse a cached
+  // prepare when available; otherwise prepare and hand the handle to the
+  // statement cache (or drop it deferred) — nothing is wasted.
+  let info = ctx.cache?.get(sql);
+  const fresh = !info;
+  if (!info) info = await prepareInfo(ctx, txHandle, sql);
+  const rewritten = expandStarSql(sql, info.description.outputs, run.query) ?? sql;
+  if (fresh) finishStatement(ctx, sql, info);
+
+  (ctx.starCache ??= new Map()).set(key, rewritten);
+  return rewritten;
+}
+
 export async function runStatement(
   ctx: SessionContext,
   txHandle: number,
@@ -407,6 +447,7 @@ export async function runStatement(
   params: ParamValue[],
   run: RunContext = EMPTY_RUN,
 ): Promise<QueryResult> {
+  sql = await resolveExpandStar(ctx, txHandle, sql, run);
   const cached = ctx.cache?.get(sql);
   if (cached) {
     try {
@@ -434,8 +475,9 @@ export async function runStatement(
 function finishStatement(ctx: SessionContext, sql: string, info: PreparedStatementInfo): void {
   const stmtType = info.description.stmtType;
   if (stmtType === StmtType.ddl) {
-    // Schema may have changed under every cached statement.
+    // Schema may have changed under every cached statement and star rewrite.
     ctx.cache?.clear();
+    ctx.starCache?.clear();
   }
   if (ctx.cache && ctx.cache.capacity > 0 && StatementCache.isCacheable(stmtType)) {
     ctx.cache.put(sql, info);
@@ -459,6 +501,7 @@ export async function* streamRows(
   lock: OpLock,
   run: RunContext = EMPTY_RUN,
 ): AsyncGenerator<Row> {
+  if (run.query.expandStar) sql = await lock(() => resolveExpandStar(ctx, txHandle, sql, run));
   const cached = ctx.cache?.get(sql);
   let info: PreparedStatementInfo | null = cached ?? null;
   let mapper: RowMapper | null = null;
