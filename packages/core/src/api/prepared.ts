@@ -1,6 +1,7 @@
 import { FreeStatement } from '../protocol/constants.js';
 import { freeStatement, type PreparedStatementInfo } from '../protocol/statement.js';
 import { executePrepared, type QueryOptions, type QueryResult, type Row } from './session.js';
+import { blobsMayProduceLazy } from './options.js';
 import { FirebirdBlobError } from './errors.js';
 import type { SqlVarDesc } from '../protocol/info.js';
 import type { ParamValue } from '../protocol/msgcodec.js';
@@ -46,7 +47,7 @@ export class PreparedStatement {
         }),
       );
     }
-    if ((options?.blobs ?? this.att.options.blobs) !== 'eager') {
+    if (blobsMayProduceLazy(options?.blobs ?? this.att.options.blobs)) {
       throw new FirebirdBlobError(
         "lazy blob modes require an explicit transaction — pass a tx to stmt.run(params, tx, {blobs:'lazy'})",
       );

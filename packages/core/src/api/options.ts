@@ -10,6 +10,34 @@ export type WireCryptOption = 'enabled' | 'disabled' | 'required';
 export type BlobMode = 'eager' | 'lazy' | 'lazy-binary' | 'lazy-text';
 
 /**
+ * Per-column blob configuration: a base mode plus named overrides. Column
+ * names match the row key (alias-aware) — bare (`DOC`) or FROM-alias
+ * qualified (`A.DOC`), case-insensitive. A column listed in both arrays is a
+ * configuration error (throws at query time).
+ *
+ * ```ts
+ * blobs: { default: 'lazy-binary', eager: ['THUMB'], lazy: ['HUGE_XML'] }
+ * ```
+ */
+export interface BlobColumnModes {
+  /** Base mode for blob columns not named below. Default 'eager'. */
+  default?: BlobMode;
+  /** Columns always materialized (string for memos, Buffer for binary). */
+  eager?: string[];
+  /** Columns always returned as lazy `Blob` handles. */
+  lazy?: string[];
+}
+
+/** The `blobs` option: a plain mode or the per-column form. */
+export type BlobsOption = BlobMode | BlobColumnModes;
+
+/** True when this blobs config can put lazy handles in rows (needs a tx). @internal */
+export function blobsMayProduceLazy(opt: BlobsOption): boolean {
+  if (typeof opt === 'string') return opt !== 'eager';
+  return (opt.default ?? 'eager') !== 'eager' || (opt.lazy?.length ?? 0) > 0;
+}
+
+/**
  * Read-ahead for LAZY blobs in `queryStream`: while the consumer processes
  * row N, the driver prefetches upcoming rows' blob contents in background
  * op-lock slices, so `.buffer()/.text()/.stream()` resolve without wire round
@@ -81,8 +109,10 @@ export interface FirebirdConnectionOptions {
    * - 'lazy-binary': binary blobs lazy, text blobs (memos) eager — the
    *   file-export sweet spot.
    * - 'lazy-text': text blobs lazy, binary blobs eager.
+   * - `{ default?, eager?: [cols], lazy?: [cols] }`: per-column overrides on
+   *   top of a base mode (see BlobColumnModes).
    */
-  blobs?: BlobMode;
+  blobs?: BlobsOption;
   /** Default lazy-blob read-ahead for `queryStream` (see BlobReadAheadOption). */
   blobReadAhead?: BlobReadAheadOption;
   blobWriteChunkSize?: number;
@@ -130,7 +160,7 @@ export interface ResolvedOptions {
   wireCryptPlugin: string | undefined;
   authPlugin: string | undefined;
   blobAsText: boolean;
-  blobs: BlobMode;
+  blobs: BlobsOption;
   blobReadAhead: ResolvedReadAhead | null;
   blobWriteChunkSize: number;
   blobReadChunkSize: number;

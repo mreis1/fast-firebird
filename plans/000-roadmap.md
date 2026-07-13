@@ -179,10 +179,11 @@ only when API surface stabilizes (avoid premature package fragmentation).
    for buffered-lazy access patterns. Companion still open: FB 5.0.2+
    protocol-level inline blobs (`op_inline_blob`) would make small blobs free
    on FB5.
-4. **Per-column blob mode** — `blobs: {default:'eager', lazy:['BLOB1']}` (and
-   the inverse): name specific columns. The subtype shorthand shipped
-   2026-07-13 (`'lazy-binary'` / `'lazy-text'` — RowMapper decides per column
-   by blob subtype); only the named-column form remains here.
+~~4. Per-column blob mode~~ — SHIPPED 2026-07-13, both forms: subtype
+   shorthands `'lazy-binary'`/`'lazy-text'`, and the named-column form
+   `blobs: {default?, eager: [cols], lazy: [cols]}` (bare or ALIAS.COL,
+   case-insensitive, overrides beat the base mode, conflict throws; auto-tx
+   guard only fires for lazy-capable configs; composes with blobReadAhead).
 ~~5. Blob head/resume cursor~~ — SHIPPED 2026-07-13: `blob.head(n)` (raw
    bytes, 2 flushes for a magic number) keeps the handle open at position;
    `buffer()`/`stream()`/`text()` resume from the cursor (no re-open, no

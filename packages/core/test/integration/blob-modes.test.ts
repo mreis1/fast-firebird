@@ -166,6 +166,112 @@ describe.each(FB_SERVERS)('blob modes on Firebird $version', ({ port, version })
     });
   });
 
+  describe('per-column form { default, eager: [], lazy: [] }', () => {
+    it('named lazy override on an eager base', async () => {
+      await db.transaction(async (tx) => {
+        const [row] = await tx.query(`select memo, bin from ${t} where id = 1`, [], {
+          blobs: { default: 'eager', lazy: ['BIN'] },
+        });
+        expect(kindOf(row!.MEMO)).toBe('string');
+        expect(kindOf(row!.BIN)).toBe('handle');
+        expect((await (row!.BIN as Blob).buffer()).equals(BIN)).toBe(true);
+      });
+    });
+
+    it('named eager override on a lazy base (case-insensitive names)', async () => {
+      await db.transaction(async (tx) => {
+        const [row] = await tx.query(`select memo, bin from ${t} where id = 1`, [], {
+          blobs: { default: 'lazy', eager: ['memo'] },
+        });
+        expect(row!.MEMO).toBe(MEMO); // decoded string despite lazy base
+        expect(kindOf(row!.BIN)).toBe('handle');
+      });
+    });
+
+    it('named overrides beat subtype base modes', async () => {
+      await db.transaction(async (tx) => {
+        // lazy-binary would lazify BIN — the eager override wins; and the
+        // lazy override drags MEMO (eager under lazy-binary) to a handle.
+        const [row] = await tx.query(`select memo, bin from ${t} where id = 1`, [], {
+          blobs: { default: 'lazy-binary', eager: ['BIN'], lazy: ['MEMO'] },
+        });
+        expect(kindOf(row!.BIN)).toBe('buffer');
+        expect(kindOf(row!.MEMO)).toBe('handle');
+        expect(await (row!.MEMO as Blob).text()).toBe(MEMO);
+      });
+    });
+
+    it('FROM-alias qualified names target one side of a self-join', async () => {
+      await db.transaction(async (tx) => {
+        const res = await tx.run(`select a.bin, b.bin from ${t} a join ${t} b on a.id = b.id and a.id = 1`, [], {
+          blobs: { default: 'eager', lazy: ['B.BIN'] },
+          rowMode: 'array',
+        });
+        const cells = res.rows[0] as unknown as unknown[];
+        expect(kindOf(cells[0])).toBe('buffer'); // a.bin stays eager
+        expect(kindOf(cells[1])).toBe('handle'); // b.bin lazy by qualifier
+      });
+    });
+
+    it('a column in both lists throws a clear error', async () => {
+      await db.transaction(async (tx) => {
+        await expect(
+          tx.query(`select bin from ${t} where id = 1`, [], { blobs: { eager: ['BIN'], lazy: ['bin'] } }),
+        ).rejects.toThrow(/both eager and lazy/);
+      });
+    });
+
+    it('db.query guard: lazy-capable configs rejected, pure-eager allowed', async () => {
+      await expect(db.query(`select bin from ${t}`, [], { blobs: { default: 'eager', lazy: ['BIN'] } })).rejects.toBeInstanceOf(
+        FirebirdBlobError,
+      );
+      await expect(db.query(`select bin from ${t}`, [], { blobs: { default: 'lazy-text' } })).rejects.toBeInstanceOf(
+        FirebirdBlobError,
+      );
+      const rows = await db.query(`select memo, bin from ${t} where id = 1`, [], { blobs: { default: 'eager', eager: ['MEMO'] } });
+      expect(rows[0]!.MEMO).toBe(MEMO);
+      expect(kindOf(rows[0]!.BIN)).toBe('buffer');
+    });
+
+    it('object form as the connection default; per-query string overrides it', async () => {
+      const conn = await connect({
+        ...FB_BASE,
+        port,
+        database: (db as any).options.database,
+        blobs: { default: 'lazy-binary', eager: ['BIN'] },
+      });
+      try {
+        await conn.transaction(async (tx) => {
+          const [row] = await tx.query(`select memo, bin from ${t} where id = 1`);
+          expect(kindOf(row!.MEMO)).toBe('string'); // lazy-binary keeps memos eager
+          expect(kindOf(row!.BIN)).toBe('buffer'); // named eager override
+          const [lazy] = await tx.query(`select memo, bin from ${t} where id = 1`, [], { blobs: 'lazy' });
+          expect(kindOf(lazy!.MEMO)).toBe('handle'); // per-query replaces the object wholesale
+          expect(kindOf(lazy!.BIN)).toBe('handle');
+        });
+      } finally {
+        await conn.disconnect();
+      }
+    });
+
+    it('read-ahead prefetches exactly the lazy-named columns', async () => {
+      const it_ = db.queryStream(`select id, memo, bin from ${t} where id = 1`, [], {
+        blobs: { default: 'eager', lazy: ['BIN'] },
+        blobReadAhead: 1,
+      })[Symbol.asyncIterator]();
+      try {
+        const r1 = (await it_.next()).value;
+        expect(kindOf(r1.MEMO)).toBe('string');
+        await new Promise((r) => setTimeout(r, 100));
+        const before = db.roundTrips;
+        expect((await (r1.BIN as Blob).buffer()).equals(BIN)).toBe(true);
+        expect(db.roundTrips - before).toBe(0); // served from prefetch
+      } finally {
+        await it_.return?.(undefined);
+      }
+    });
+  });
+
   it('rowMode array keeps the matrix per position', async () => {
     await db.transaction(async (tx) => {
       const res = await tx.run(`select memo, bin from ${t} where id = 1`, [], { blobs: 'lazy-binary', rowMode: 'array' });

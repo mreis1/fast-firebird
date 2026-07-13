@@ -16,7 +16,7 @@ import { FirebirdBlobError, FirebirdConnectionError } from './errors.js';
 import { StatementCache } from './statement-cache.js';
 import { PreparedStatement } from './prepared.js';
 import { Transaction } from './transaction.js';
-import { resolveOptions, type FirebirdConnectionOptions, type LegacyOptionAliases, type ResolvedOptions } from './options.js';
+import { blobsMayProduceLazy, resolveOptions, type FirebirdConnectionOptions, type LegacyOptionAliases, type ResolvedOptions } from './options.js';
 import { Op } from '../protocol/constants.js';
 import { executeScript, type ExecuteScriptOptions, type ScriptExecutionResult } from '../script/execute.js';
 import { EventChannel, type EventListener } from '../events/events.js';
@@ -177,7 +177,7 @@ export class Attachment {
 
   /** Run a single statement in its own transaction; returns rows + count. */
   async run(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<QueryResult> {
-    if ((options?.blobs ?? this.options.blobs) !== 'eager') {
+    if (blobsMayProduceLazy(options?.blobs ?? this.options.blobs)) {
       throw new FirebirdBlobError(
         "lazy blob modes ('lazy', 'lazy-binary', 'lazy-text') require an explicit transaction or a stream — use db.transaction(tx => tx.query(…, {blobs:…})) or db.queryStream(…, {blobs:…}), or override with {blobs:'eager'}",
       );

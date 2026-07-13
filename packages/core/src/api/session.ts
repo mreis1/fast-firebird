@@ -20,7 +20,7 @@ import { Blob, type BlobScope } from './blob.js';
 import { FirebirdError } from './errors.js';
 import type { SqlVarDesc } from '../protocol/info.js';
 import type { WireConnection } from '../protocol/wire.js';
-import { resolveReadAhead, type BlobMode, type BlobReadAheadOption, type ResolvedOptions, type ResolvedReadAhead } from './options.js';
+import { resolveReadAhead, type BlobMode, type BlobReadAheadOption, type BlobsOption, type ResolvedOptions, type ResolvedReadAhead } from './options.js';
 
 export type Row = Record<string, unknown>;
 
@@ -58,9 +58,10 @@ export interface QueryOptions {
   /**
    * Blob handling override for this statement: 'eager' (default)
    * materializes; 'lazy' returns Blob handles; 'lazy-binary' / 'lazy-text'
-   * lazify only that subtype (the other stays eager).
+   * lazify only that subtype; `{default?, eager?: [cols], lazy?: [cols]}`
+   * names specific columns on top of a base mode.
    */
-  blobs?: BlobMode;
+  blobs?: BlobsOption;
   /** Column names (alias/field, case-insensitive) to omit from rows. */
   exclude?: string[];
   /** If set, keep ONLY these columns (applied before `exclude`). */
@@ -214,7 +215,13 @@ class RowMapper {
     const lc = ctx.opts.lowercaseKeys;
     const only = run.query.only?.map((s) => s.toLowerCase());
     const exclude = new Set(run.query.exclude?.map((s) => s.toLowerCase()) ?? []);
-    const mode: BlobMode = run.query.blobs ?? ctx.opts.blobs;
+    const blobsOpt: BlobsOption = run.query.blobs ?? ctx.opts.blobs;
+    const mode: BlobMode = typeof blobsOpt === 'string' ? blobsOpt : (blobsOpt.default ?? 'eager');
+    const forceEager = new Set(typeof blobsOpt === 'string' ? [] : (blobsOpt.eager ?? []).map((s) => s.toLowerCase()));
+    const forceLazy = new Set(typeof blobsOpt === 'string' ? [] : (blobsOpt.lazy ?? []).map((s) => s.toLowerCase()));
+    for (const c of forceEager) {
+      if (forceLazy.has(c)) throw new FirebirdError(`blobs: column '${c}' is listed as both eager and lazy`);
+    }
     // Subtype 1 = text (memo); everything else counts as binary.
     const lazyFor = (subType: number): boolean =>
       mode === 'lazy' || (mode === 'lazy-binary' && subType !== 1) || (mode === 'lazy-text' && subType === 1);
@@ -235,7 +242,9 @@ class RowMapper {
       const kept = this.arrayMode || ((!only || listed(only)) && !excluded);
       const isBlob = isBlobType(d.type);
       this.blobCodec[i] = isBlob && d.subType === 1 ? codecForDesc(d, ctx.opts, 'blob') : null;
-      this.lazyCol[i] = isBlob && lazyFor(d.subType);
+      // Named overrides (bare or ALIAS.COL) beat the base mode.
+      const named = (set: Set<string>) => set.has(lower) || (qual !== null && set.has(qual));
+      this.lazyCol[i] = isBlob && (named(forceLazy) ? true : named(forceEager) ? false : lazyFor(d.subType));
       if (kept && isBlob) {
         if (this.lazyCol[i]) keptLazyBlobs = true;
         else keptEagerBlobs = true;
