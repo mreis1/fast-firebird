@@ -29,6 +29,7 @@ export async function allocateAndPrepare(
   txHandle: number,
   sql: string,
   int64As: 'auto' | 'bigint' | 'number' = 'auto',
+  tzMode: 'instant' | 'zoned' = 'instant',
 ): Promise<PreparedStatementInfo> {
   wire.writer.int32(Op.allocate_statement).int32(dbHandle);
   wire.writer
@@ -47,7 +48,7 @@ export async function allocateAndPrepare(
   const description = parseDescribe(prepResp.data);
 
   // Text codecs are attached by the caller once column metadata is known.
-  const columnReaders = description.outputs.map((d) => makeColumnReader(d, null, int64As));
+  const columnReaders = description.outputs.map((d) => makeColumnReader(d, null, int64As, tzMode));
   const outputBlr = description.outputs.length > 0 ? buildOutputBlr(description.outputs) : Buffer.alloc(0);
   const rowWidth = estimateRowWidth(description.outputs);
   return { handle, description, outputBlr, columnReaders, rowWidth };

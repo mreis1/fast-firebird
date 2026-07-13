@@ -12,6 +12,7 @@ export { EventListener, EventChannel } from './events/events.js';
 export { Service, connectService, type ServiceConnectOptions, type ServerInfo } from './services/service.js';
 export type { QueryResult, Row, QueryOptions, ColumnInfo } from './api/session.js';
 export { Blob, prefetchBlobs } from './api/blob.js';
+export { ZonedDate } from './types/zoned-date.js';
 export type { TransactionOptions, IsolationLevel } from './protocol/transaction.js';
 export type { ParamValue } from './protocol/msgcodec.js';
 export type { FirebirdConnectionOptions, LegacyOptionAliases, WireCryptOption, BlobMode, BlobColumnModes, BlobsOption, BlobReadAheadOption } from './api/options.js';

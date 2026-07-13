@@ -3,7 +3,8 @@ import type { SqlVarDesc } from './info.js';
 import type { WireConnection } from './wire.js';
 import type { XdrWriter } from './xdr.js';
 import type { TextCodec } from '../charset/decoder.js';
-import { decodeDate, decodeTimeMs, decodeTimestamp, encodeTimestamp, encodeDateOnly, timeMsToFractions } from '../types/datetime.js';
+import { decodeDate, decodeTimeMs, decodeTimestamp, encodeTimestamp, encodeTimestampUtc, encodeDateOnly, timeMsToFractions } from '../types/datetime.js';
+import { ZonedDate, tzIdToZone, zoneToTzId } from '../types/zoned-date.js';
 import { decodeDecFloat } from '../types/decfloat.js';
 import { FirebirdError } from '../api/errors.js';
 
@@ -51,7 +52,12 @@ async function readPadded(wire: WireConnection, len: number): Promise<Buffer> {
 }
 
 /** Build the reader for one output column, resolved once at prepare time. */
-export function makeColumnReader(desc: SqlVarDesc, textCodec: TextCodec | null, int64As: Int64Mode['int64As']): ColumnReader {
+export function makeColumnReader(
+  desc: SqlVarDesc,
+  textCodec: TextCodec | null,
+  int64As: Int64Mode['int64As'],
+  tzMode: 'instant' | 'zoned' = 'instant',
+): ColumnReader {
   const scale = desc.scale;
   switch (desc.type) {
     case SqlType.TEXT: {
@@ -112,9 +118,10 @@ export function makeColumnReader(desc: SqlVarDesc, textCodec: TextCodec | null, 
       return async (w) => {
         const days = await w.readInt32();
         const frac = (await w.readInt32()) >>> 0;
-        await w.transport.read(4 + extra * 4); // zone id (+ ext offset) — instant is UTC
-        const ms = (days - 40_587) * 86_400_000 + frac / 10;
-        return new Date(ms);
+        const tzId = (await w.readInt32()) & 0xffff; // XDR short in a 4-byte slot
+        if (extra) await w.transport.read(4); // EX effective offset — id is authoritative
+        const d = new Date((days - 40_587) * 86_400_000 + frac / 10); // instant is UTC
+        return tzMode === 'zoned' ? new ZonedDate(d, tzIdToZone(tzId)) : d;
       };
     }
     case SqlType.TIME_TZ:
@@ -122,8 +129,10 @@ export function makeColumnReader(desc: SqlVarDesc, textCodec: TextCodec | null, 
       const extra = desc.type === SqlType.TIME_TZ_EX ? 1 : 0;
       return async (w) => {
         const frac = (await w.readInt32()) >>> 0;
-        await w.transport.read(4 + extra * 4); // zone id
-        return new Date(frac / 10); // UTC time-of-day on 1970-01-01
+        const tzId = (await w.readInt32()) & 0xffff;
+        if (extra) await w.transport.read(4);
+        const d = new Date(frac / 10); // UTC time-of-day on 1970-01-01
+        return tzMode === 'zoned' ? new ZonedDate(d, tzIdToZone(tzId)) : d;
       };
     }
     case SqlType.BLOB:
@@ -274,6 +283,7 @@ export type ParamValue =
   | bigint
   | boolean
   | Date
+  | ZonedDate
   | Buffer
   | BlobRef
   | DecFloatVal
@@ -357,6 +367,14 @@ export function encodeParams(
           w.raw(buf);
         });
       }
+    } else if (v instanceof ZonedDate) {
+      // WITH TIME ZONE wire value: UTC instant + zone id (XDR short → 4-byte
+      // slot). The server coerces blr_timestamp_tz to TIME WITH TIME ZONE
+      // targets as needed.
+      blr.byte(Blr.timestamp_tz);
+      const { days, fractions } = encodeTimestampUtc(v.date);
+      const tzId = zoneToTzId(v.zone);
+      values2.push((w) => w.int32(days).uint32(fractions).uint32(tzId));
     } else if (v instanceof Date) {
       blr.byte(Blr.timestamp);
       const { days, fractions } = encodeTimestamp(v);

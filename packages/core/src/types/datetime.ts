@@ -56,3 +56,14 @@ export function encodeTimestamp(value: Date): { days: number; fractions: number 
 export function encodeDateOnly(value: Date): number {
   return dateToDays(value.getFullYear(), value.getMonth() + 1, value.getDate());
 }
+
+/**
+ * Encode the UTC instant of `value` — for WITH TIME ZONE wire values, which
+ * Firebird stores in UTC (plain TIMESTAMP uses local wall time instead).
+ */
+export function encodeTimestampUtc(value: Date): { days: number; fractions: number } {
+  const ms = value.getTime();
+  const dayMs = 86_400_000;
+  const dayIndex = Math.floor(ms / dayMs);
+  return { days: dayIndex + 40_587, fractions: (ms - dayIndex * dayMs) * 10 };
+}

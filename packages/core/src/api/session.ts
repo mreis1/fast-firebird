@@ -346,12 +346,12 @@ class RowMapper {
 
 /** Prepare a statement and attach its per-column text codecs. */
 export async function prepareInfo(ctx: SessionContext, txHandle: number, sql: string): Promise<PreparedStatementInfo> {
-  const info = await allocateAndPrepare(ctx.wire, ctx.dbHandle, txHandle, sql);
+  const info = await allocateAndPrepare(ctx.wire, ctx.dbHandle, txHandle, sql, 'auto', ctx.opts.timeZones);
   const outputs = info.description.outputs;
   for (let i = 0; i < outputs.length; i++) {
     const d = outputs[i]!;
     if (isTextType(d.type)) {
-      info.columnReaders[i] = makeColumnReader(d, codecForDesc(d, ctx.opts, 'text'), 'auto');
+      info.columnReaders[i] = makeColumnReader(d, codecForDesc(d, ctx.opts, 'text'), 'auto', ctx.opts.timeZones);
     }
   }
   return info;
@@ -508,7 +508,7 @@ function isStaleStatementError(err: unknown): boolean {
  */
 async function resolveExpandStar(ctx: SessionContext, txHandle: number, sql: string, run: RunContext): Promise<string> {
   if (!run.query.expandStar) return sql;
-  const key = `${sql} ${(run.query.only ?? []).join(',').toLowerCase()} ${(run.query.exclude ?? []).join(',').toLowerCase()}`;
+  const key = `${sql}\u0000${(run.query.only ?? []).join(',').toLowerCase()}\u0000${(run.query.exclude ?? []).join(',').toLowerCase()}`;
   const hit = ctx.starCache?.get(key);
   if (hit !== undefined) return hit;
 

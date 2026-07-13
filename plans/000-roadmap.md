@@ -166,10 +166,12 @@ only when API surface stabilizes (avoid premature package fragmentation).
 ~~1. `SELECT *` projection rewrite~~ — SHIPPED 2026-07-13, see
    `plans/projection.md`.
 
-2. **Zone-preserving timezone types** — TIMESTAMP/TIME WITH TIME ZONE currently
-   decode to UTC-instant JS `Date`s (instant exact, zone id dropped; verified:
-   09:30 America/New_York → 13:30Z). Apps that must round-trip the *zone*
-   need a `{date, zone}` value or Temporal ZonedDateTime once stable in Node.
+~~2. Zone-preserving timezone types~~ — SHIPPED 2026-07-13: opt-in
+   `timeZones: 'zoned'` connection mode returns `ZonedDate {date, zone}`
+   (UTC instant + IANA name or ±HH:MM offset; also bindable as a param, zone
+   round-trips). Default 'instant' (plain Date) unchanged. Zone-id table
+   generated from Firebird's TimeZones.h (tzdata 2026b; offset ids =
+   displacement + 1439). Temporal interop can layer on later.
 ~~3. Cross-blob pipelining~~ — SHIPPED 2026-07-13, both halves:
    (a) eager batch materialization overlaps open/read/close across blobs
    automatically (`readBlobs`: global 32-deep window across blobs, FIFO

@@ -132,6 +132,16 @@ export interface FirebirdConnectionOptions {
   /** Rows requested per fetch round trip. */
   fetchSize?: number;
 
+  /**
+   * How TIMESTAMP/TIME WITH TIME ZONE columns decode:
+   * - 'instant' (default): JS `Date` — the exact UTC instant; the stored
+   *   zone id is dropped.
+   * - 'zoned': `ZonedDate { date, zone }` — same instant plus the zone
+   *   ('Europe/Lisbon' or '+02:30'), round-trippable as a parameter.
+   * Connection-level only (column readers are cached per statement).
+   */
+  timeZones?: 'instant' | 'zoned';
+
   charsetNoneEncoding?: string;
   transcodeAdapter?: FirebirdTranscodeAdapter;
   charsetOverrides?: Record<string, string>;
@@ -176,6 +186,7 @@ export interface ResolvedOptions {
   blobReadAhead: ResolvedReadAhead | null;
   maxInlineBlobSize: number;
   maxBlobCacheSize: number;
+  timeZones: 'instant' | 'zoned';
   blobWriteChunkSize: number;
   blobReadChunkSize: number;
   fetchSize: number;
@@ -215,6 +226,7 @@ export function resolveOptions(raw: FirebirdConnectionOptions & LegacyOptionAlia
     blobReadAhead: resolveReadAhead(raw.blobReadAhead),
     maxInlineBlobSize: clamp(raw.maxInlineBlobSize ?? 65_535, 0, 65_535),
     maxBlobCacheSize: Math.max(0, raw.maxBlobCacheSize ?? 10 * 1024 * 1024),
+    timeZones: raw.timeZones ?? 'instant',
     // Wire maximum by default — blob throughput is round-trip-bound.
     blobWriteChunkSize: clamp(raw.blobWriteChunkSize ?? raw.blobChunkSize ?? 65_535, 1, 65_535),
     blobReadChunkSize: clamp(raw.blobReadChunkSize ?? 65_535, 1, 65_535),
