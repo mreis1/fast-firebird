@@ -151,7 +151,9 @@ describe.each(FB_SERVERS)('statement cache & round trips on Firebird $version', 
     });
 
     it('statementCacheSize: 0 disables caching but everything still works', async () => {
-      const raw = await connect({ ...FB_BASE, port, statementCacheSize: 0 });
+      // Same DATABASE as the suite (the table lives in its freshDb, not the
+      // shared test.fdb — CI's pristine containers caught this).
+      const raw = await connect({ ...FB_BASE, port, database: (db as any).options.database, statementCacheSize: 0 });
       try {
         const sql = `select name from ${table} where id = ?`;
         await raw.transaction(async (tx) => {
