@@ -5,8 +5,17 @@ import {
   type TransactionOptions,
 } from '../protocol/transaction.js';
 import { runStatement, streamRows, type QueryOptions, type QueryResult, type RunContext, type Row } from './session.js';
+import { FirebirdError } from './errors.js';
 import type { ParamValue } from '../protocol/msgcodec.js';
 import type { Attachment } from './attachment.js';
+
+/** isc_read_only_trans: "attempted update during read-only transaction". */
+const ISC_READ_ONLY_TRANS = 335544361;
+
+function isReadOnlyViolation(err: unknown): boolean {
+  if (err instanceof FirebirdError && err.gdsCode === ISC_READ_ONLY_TRANS) return true;
+  return /attempted update during read-only transaction/i.test(String((err as Error)?.message ?? ''));
+}
 
 export interface RestartOptions extends TransactionOptions {
   /** Finish the current transaction by 'commit' (default) or 'rollback'. */
@@ -23,6 +32,7 @@ export class Transaction {
   private currentHandle: number;
   /** Bumped on restart so lazy blob handles from a prior cycle read as dead. */
   private generation = 0;
+  private wasAutoUpgraded = false;
 
   constructor(
     private readonly att: Attachment,
@@ -41,6 +51,11 @@ export class Transaction {
     return this.finished;
   }
 
+  /** True once `autoUpgradeReadOnly` has promoted this transaction to read-write. */
+  get autoUpgraded(): boolean {
+    return this.wasAutoUpgraded;
+  }
+
   private assertActive(): void {
     if (this.finished) throw new Error('Transaction already committed or rolled back');
   }
@@ -51,15 +66,43 @@ export class Transaction {
     return { query: options ?? {}, txAlive: () => !this.finished && this.generation === gen && this.att.isAlive };
   }
 
-  /** Run a statement and return its rows. */
-  async query(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<Row[]> {
-    return (await this.run(sql, params, options)).rows;
+  /** Run a statement and return its rows (`query<T>` types them). */
+  async query<T = Row>(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<T[]> {
+    return (await this.run<T>(sql, params, options)).rows;
+  }
+
+  /**
+   * Run a statement and return the FIRST row, or `undefined` when the result
+   * is empty. The whole result set is still fetched — put `FIRST 1` (or a
+   * unique predicate) in the SQL when the query could match many rows.
+   */
+  async queryOne<T = Row>(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<T | undefined> {
+    return (await this.run<T>(sql, params, options)).rows[0];
   }
 
   /** Run a statement and return rows + affected-record count. */
-  async run(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<QueryResult> {
+  async run<T = Row>(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<QueryResult<T>> {
     this.assertActive();
-    return this.att.withLock(() => runStatement(this.att.session, this.handle, sql, params, this.runContext(options)));
+    const attempt = () =>
+      this.att.withLock(() => runStatement(this.att.session, this.handle, sql, params, this.runContext(options)));
+    try {
+      return (await attempt()) as QueryResult<T>;
+    } catch (err) {
+      if (!this.shouldAutoUpgrade(err)) throw err;
+      // RO→RW auto-upgrade: commit the (write-free) read-only transaction,
+      // reopen read-write with the same isolation, replay the statement ONCE.
+      // After the upgrade `readOnly` is false, so a second failure propagates.
+      await this.restart({ ...this.options, readOnly: false });
+      this.wasAutoUpgraded = true;
+      return (await attempt()) as QueryResult<T>;
+    }
+  }
+
+  /** Write refused because THIS transaction is read-only, and upgrading is opted in. */
+  private shouldAutoUpgrade(err: unknown): boolean {
+    if (this.finished || this.options.readOnly !== true) return false;
+    if (!(this.options.autoUpgradeReadOnly ?? this.att.options.autoUpgradeReadOnly)) return false;
+    return isReadOnlyViolation(err);
   }
 
   /** Run a statement, returning only the affected-record count. */
@@ -72,9 +115,24 @@ export class Transaction {
    * the caller owns the transaction). Backpressure at batch granularity.
    * Lazy blob handles from this stream stay valid until the transaction ends.
    */
-  queryStream(sql: string, params: ParamValue[] = [], options?: QueryOptions): AsyncGenerator<Row> {
+  queryStream<T = Row>(sql: string, params: ParamValue[] = [], options?: QueryOptions): AsyncGenerator<T> {
     this.assertActive();
-    return streamRows(this.att.session, this.handle, sql, params, (fn) => this.att.withLock(fn), this.runContext(options));
+    return streamRows(
+      this.att.session,
+      this.handle,
+      sql,
+      params,
+      (fn) => this.att.withLock(fn),
+      this.runContext(options),
+    ) as AsyncGenerator<T>;
+  }
+
+  /**
+   * `await using tx = await db.startTransaction()` → rolls back at scope
+   * exit unless the transaction was committed (or rolled back) explicitly.
+   */
+  async [Symbol.asyncDispose](): Promise<void> {
+    if (!this.finished) await this.rollback();
   }
 
   async commit(): Promise<void> {

@@ -133,6 +133,14 @@ export interface FirebirdConnectionOptions {
   fetchSize?: number;
 
   /**
+   * Default for `TransactionOptions.autoUpgradeReadOnly`: transparently
+   * upgrade a read-only transaction to read-write (commit + reopen + replay
+   * the failing statement once) when a write is attempted in it. Default
+   * false. See `TransactionOptions.autoUpgradeReadOnly` for the semantics.
+   */
+  autoUpgradeReadOnly?: boolean;
+
+  /**
    * How TIMESTAMP/TIME WITH TIME ZONE columns decode:
    * - 'instant' (default): JS `Date` — the exact UTC instant; the stored
    *   zone id is dropped.
@@ -186,6 +194,7 @@ export interface ResolvedOptions {
   blobReadAhead: ResolvedReadAhead | null;
   maxInlineBlobSize: number;
   maxBlobCacheSize: number;
+  autoUpgradeReadOnly: boolean;
   timeZones: 'instant' | 'zoned';
   blobWriteChunkSize: number;
   blobReadChunkSize: number;
@@ -226,6 +235,7 @@ export function resolveOptions(raw: FirebirdConnectionOptions & LegacyOptionAlia
     blobReadAhead: resolveReadAhead(raw.blobReadAhead),
     maxInlineBlobSize: clamp(raw.maxInlineBlobSize ?? 65_535, 0, 65_535),
     maxBlobCacheSize: Math.max(0, raw.maxBlobCacheSize ?? 10 * 1024 * 1024),
+    autoUpgradeReadOnly: raw.autoUpgradeReadOnly ?? false,
     timeZones: raw.timeZones ?? 'instant',
     // Wire maximum by default — blob throughput is round-trip-bound.
     blobWriteChunkSize: clamp(raw.blobWriteChunkSize ?? raw.blobChunkSize ?? 65_535, 1, 65_535),

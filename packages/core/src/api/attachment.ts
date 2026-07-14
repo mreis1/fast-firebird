@@ -159,9 +159,22 @@ export class Attachment {
     }
   }
 
-  /** Run a single statement in its own transaction and return the rows. */
-  async query(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<Row[]> {
-    return (await this.run(sql, params, options)).rows;
+  /**
+   * Run a single statement in its own transaction and return the rows.
+   * Type rows via the generic: `db.query<{ ID: number }>('select id from t')`.
+   * (Compile-time shaping only — no runtime validation.)
+   */
+  async query<T = Row>(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<T[]> {
+    return (await this.run<T>(sql, params, options)).rows;
+  }
+
+  /**
+   * Run a statement and return the FIRST row, or `undefined` when the result
+   * is empty. The whole result set is still fetched — put `FIRST 1` (or a
+   * unique predicate) in the SQL when the query could match many rows.
+   */
+  async queryOne<T = Row>(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<T | undefined> {
+    return (await this.run<T>(sql, params, options)).rows[0];
   }
 
   /**
@@ -187,7 +200,7 @@ export class Attachment {
   }
 
   /** Run a single statement in its own transaction; returns rows + count. */
-  async run(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<QueryResult> {
+  async run<T = Row>(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<QueryResult<T>> {
     if (blobsMayProduceLazy(options?.blobs ?? this.options.blobs)) {
       throw new FirebirdBlobError(
         "lazy blob modes ('lazy', 'lazy-binary', 'lazy-text') require an explicit transaction or a stream — use db.transaction(tx => tx.query(…, {blobs:…})) or db.queryStream(…, {blobs:…}), or override with {blobs:'eager'}",
@@ -199,7 +212,7 @@ export class Attachment {
         runStatement(this.session, tx.handle, sql, params, { query: options ?? {}, txAlive: () => !tx.isFinished }),
       );
       await tx.commit();
-      return result;
+      return result as QueryResult<T>;
     } catch (err) {
       if (!tx.isFinished) {
         try {
@@ -261,14 +274,14 @@ export class Attachment {
     this.eventChannel = null;
   }
 
-  async *queryStream(sql: string, params: ParamValue[] = [], options?: QueryOptions): AsyncGenerator<Row> {
+  async *queryStream<T = Row>(sql: string, params: ParamValue[] = [], options?: QueryOptions): AsyncGenerator<T> {
     const tx = await this.startTransaction();
     let ok = false;
     try {
       yield* streamRows(this.session, tx.handle, sql, params, (fn) => this.withLock(fn), {
         query: options ?? {},
         txAlive: () => !tx.isFinished && this.isAlive,
-      });
+      }) as AsyncGenerator<T>;
       ok = true;
     } finally {
       if (!tx.isFinished) {
@@ -311,6 +324,11 @@ export class Attachment {
       this.wire.flush(); // the deferred frees ride this packet
       await this.wire.readResponse();
     });
+  }
+
+  /** `await using db = await connect(…)` → disconnects at scope exit. */
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.disconnect();
   }
 
   async disconnect(): Promise<void> {

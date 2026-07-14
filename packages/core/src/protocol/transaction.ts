@@ -14,6 +14,18 @@ export interface TransactionOptions {
   /** true (default) = wait for locks; number = lock timeout seconds; false = nowait. */
   wait?: boolean | number;
   autoCommit?: boolean;
+  /**
+   * Client-side behavior, not part of the TPB: when a statement in a
+   * read-only transaction fails with "attempted update during read-only
+   * transaction", commit and reopen the transaction read-write (same
+   * isolation/wait) and replay that statement once. Applies to
+   * `tx.query/run/execute`; `queryStream` and prepared statements are not
+   * replayed. The upgrade is a real commit + new transaction: the snapshot
+   * moves forward and lazy Blob handles from before it become invalid; the
+   * transaction stays read-write afterwards (`tx.autoUpgraded` reports it).
+   * Default: the connection's `autoUpgradeReadOnly` option (false).
+   */
+  autoUpgradeReadOnly?: boolean;
 }
 
 export function buildTpb(opts: TransactionOptions = {}): Buffer {

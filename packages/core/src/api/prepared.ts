@@ -37,7 +37,7 @@ export class PreparedStatement {
   }
 
   /** Run inside an explicit transaction, or a one-shot one when omitted. */
-  async run(params: ParamValue[] = [], tx?: Transaction, options?: QueryOptions): Promise<QueryResult> {
+  async run<T = Row>(params: ParamValue[] = [], tx?: Transaction, options?: QueryOptions): Promise<QueryResult<T>> {
     this.assertOpen();
     if (tx) {
       return this.att.withLock(() =>
@@ -45,7 +45,7 @@ export class PreparedStatement {
           query: options ?? {},
           txAlive: () => !tx.isFinished && this.att.isAlive,
         }),
-      );
+      ) as Promise<QueryResult<T>>;
     }
     if (blobsMayProduceLazy(options?.blobs ?? this.att.options.blobs)) {
       throw new FirebirdBlobError(
@@ -61,7 +61,7 @@ export class PreparedStatement {
         }),
       );
       await own.commit();
-      return result;
+      return result as QueryResult<T>;
     } catch (err) {
       if (!own.isFinished) {
         try {
@@ -74,12 +74,22 @@ export class PreparedStatement {
     }
   }
 
-  async query(params: ParamValue[] = [], tx?: Transaction, options?: QueryOptions): Promise<Row[]> {
-    return (await this.run(params, tx, options)).rows;
+  async query<T = Row>(params: ParamValue[] = [], tx?: Transaction, options?: QueryOptions): Promise<T[]> {
+    return (await this.run<T>(params, tx, options)).rows;
+  }
+
+  /** First row or `undefined` (see `Attachment.queryOne`). */
+  async queryOne<T = Row>(params: ParamValue[] = [], tx?: Transaction, options?: QueryOptions): Promise<T | undefined> {
+    return (await this.run<T>(params, tx, options)).rows[0];
   }
 
   async execute(params: ParamValue[] = [], tx?: Transaction, options?: QueryOptions): Promise<number> {
     return (await this.run(params, tx, options)).rowsAffected;
+  }
+
+  /** `await using stmt = await db.prepare(…)` → closes at scope exit. */
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.close();
   }
 
   /** Release the server-side handle (deferred; rides with the next packet). */

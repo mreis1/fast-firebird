@@ -1,4 +1,6 @@
+import { createWriteStream } from 'node:fs';
 import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { blobTotalLength, closeBlobDeferred, getBlobSegment, openBlob, readBlob, readBlobs, readBlobWindow } from '../protocol/blob.js';
 import { FirebirdBlobError } from './errors.js';
 import type { WireConnection } from '../protocol/wire.js';
@@ -239,6 +241,29 @@ export class Blob {
       return typeof decoded === 'string' ? decoded : decoded.toString('utf8');
     }
     return buf.toString(encoding ?? 'utf8');
+  }
+
+  /**
+   * Stream the blob into a file (created or truncated) without buffering it
+   * whole in memory. Returns the number of bytes written.
+   *
+   * ```ts
+   * await row.DOC.toFile(`/exports/${row.FILENAME}`);
+   * ```
+   */
+  async toFile(path: string): Promise<number> {
+    let bytes = 0;
+    await pipeline(
+      this.stream(),
+      async function* (chunks: AsyncIterable<Buffer>) {
+        for await (const c of chunks) {
+          bytes += c.length;
+          yield c;
+        }
+      },
+      createWriteStream(path),
+    );
+    return bytes;
   }
 
   /** Total byte length via op_info_blob (one round trip; opens + closes the blob). */

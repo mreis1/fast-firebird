@@ -42,8 +42,8 @@ export interface ColumnInfo {
   nullable: boolean;
 }
 
-export interface QueryResult {
-  rows: Row[];
+export interface QueryResult<T = Row> {
+  rows: T[];
   /** Affected-record counts for DML; zeros for plain selects. */
   rowsAffected: number;
   /**
@@ -80,6 +80,13 @@ export interface QueryOptions {
    */
   blobReadAhead?: BlobReadAheadOption;
   /**
+   * Max rows per fetch round trip for THIS statement, overriding the
+   * connection-level `fetchSize` (adaptive batch sizing still applies —
+   * this is the ceiling, clamped to 1–65535). Lower it to smooth memory/
+   * latency on huge rows; raise it for bulk scans of narrow ones.
+   */
+  fetchSize?: number;
+  /**
    * Rewrite top-level `*` / `alias.*` / `table.*` into an explicit column
    * list (minus `exclude`, filtered by `only`) BEFORE preparing — excluded
    * columns are then genuinely never sent by the server, scalars included
@@ -115,6 +122,12 @@ export interface RunContext {
 }
 
 const EMPTY_RUN: RunContext = { query: {}, txAlive: () => true };
+
+/** Fetch ceiling for a run: per-query override (clamped) over the connection default. */
+function fetchCeiling(run: RunContext, opts: ResolvedOptions): number {
+  const o = run.query.fetchSize;
+  return o ? Math.min(Math.max(1, Math.floor(o)), 65_535) : opts.fetchSize;
+}
 
 function textCodecOptions(opts: ResolvedOptions): TextCodecOptions {
   return {
@@ -381,7 +394,8 @@ export async function executePrepared(
   const isSelect = isSelectType(stmtType);
   // Adaptive fetch: the piggybacked first batch starts modest, later batches
   // ramp toward the byte budget (see fetch-plan.ts).
-  let fetchCount = isSelect ? nextFetchCount(info.rowWidth, opts.fetchSize, 0) : 0;
+  const maxRows = fetchCeiling(run, opts);
+  let fetchCount = isSelect ? nextFetchCount(info.rowWidth, maxRows, 0) : 0;
   const exec = await executeStatement(wire, info, txHandle, prepared, encodeText, {
     fetchSize: isSelect ? fetchCount : undefined,
     recordCounts: wantsRecordCounts(stmtType),
@@ -393,7 +407,7 @@ export async function executePrepared(
     let batch = await readFetchBatch(wire, info);
     rows.push(...batch.rows);
     while (!batch.eof) {
-      fetchCount = nextFetchCount(info.rowWidth, opts.fetchSize, fetchCount);
+      fetchCount = nextFetchCount(info.rowWidth, maxRows, fetchCount);
       batch = await fetchRows(wire, info, fetchCount);
       rows.push(...batch.rows);
     }
@@ -618,7 +632,7 @@ export async function* streamRows(
       mapper = new RowMapper(ctx, txHandle, info.description.outputs, run);
       const { prepared, encodeText } = await prepareParams(ctx, txHandle, info, params);
       const isSelect = isSelectType(info.description.stmtType);
-      const fc = isSelect ? nextFetchCount(info.rowWidth, ctx.opts.fetchSize, 0) : 0;
+      const fc = isSelect ? nextFetchCount(info.rowWidth, fetchCeiling(run, ctx.opts), 0) : 0;
       const exec = await executeStatement(ctx.wire, info, txHandle, prepared, encodeText, {
         fetchSize: isSelect ? fc : undefined,
         recordCounts: false,
@@ -661,7 +675,7 @@ export async function* streamRows(
     let fc = first.fc;
     while (!eof) {
       const b = await lock(async () => {
-        fc = nextFetchCount(info!.rowWidth, ctx.opts.fetchSize, fc);
+        fc = nextFetchCount(info!.rowWidth, fetchCeiling(run, ctx.opts), fc);
         const batch = await fetchRows(ctx.wire, info!, fc);
         await mapper!.materialize(batch.rows);
         return batch;

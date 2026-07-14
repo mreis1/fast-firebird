@@ -237,12 +237,17 @@ export class Pool {
     return results;
   }
 
-  query(sql: string, params: ParamValue[] = []): Promise<Row[]> {
-    return this.use((c) => c.query(sql, params));
+  query<T = Row>(sql: string, params: ParamValue[] = []): Promise<T[]> {
+    return this.use((c) => c.query<T>(sql, params));
   }
 
-  run(sql: string, params: ParamValue[] = []): Promise<QueryResult> {
-    return this.use((c) => c.run(sql, params));
+  /** First row or `undefined` (see `Attachment.queryOne`). */
+  queryOne<T = Row>(sql: string, params: ParamValue[] = []): Promise<T | undefined> {
+    return this.use((c) => c.queryOne<T>(sql, params));
+  }
+
+  run<T = Row>(sql: string, params: ParamValue[] = []): Promise<QueryResult<T>> {
+    return this.use((c) => c.run<T>(sql, params));
   }
 
   execute(sql: string, params: ParamValue[] = []): Promise<number> {
@@ -251,6 +256,11 @@ export class Pool {
 
   transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T> {
     return this.use((c) => c.transaction(fn, options));
+  }
+
+  /** `await using pool = await createPool(…)` → closes at scope exit. */
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.close();
   }
 
   /** Close every connection and reject pending waiters. */

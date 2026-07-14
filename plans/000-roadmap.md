@@ -114,7 +114,8 @@ only when API surface stabilizes (avoid premature package fragmentation).
       materialization). 33 tests; verified unread blobs cost zero round trips.
 - [x] Transaction `restart(options?)` — commit(default)/rollback + reopen,
       reuses or replaces isolation strategy; tx-generation invalidates prior
-      lazy blob handles. 18 tests. (autoUpgradeReadOnly: deferred, opt-in later.)
+      lazy blob handles. 18 tests. (autoUpgradeReadOnly shipped 2026-07-13 —
+      deferred backlog #7.)
 - [x] Pool parallelism helper `pool.map(items, fn, {concurrency})` — bounded
       concurrent work across pooled connections, results in order. Honest note:
       lazy blob handles can't cross connections, so parallelize by running the
@@ -207,13 +208,21 @@ only when API surface stabilizes (avoid premature package fragmentation).
    source-throw drains cleanly incl. unflushed segments). Lazy `Blob` handles
    are rejected as params with guidance (same-connection deadlock guard —
    `await blob.buffer()` first).
-7. **core `autoUpgradeReadOnly`** — opt-in RO→RW transaction auto-upgrade with
-   statement replay in core's own API (the nf2-ext compat layer already does
-   this at its level).
-8. **Small DX helpers** — per-query `fetchSize` override in `QueryOptions`;
-   `queryOne()` (single-row-or-undefined); typed rows `query<T>()`;
-   `Symbol.asyncDispose` (`await using`) on Attachment/Transaction/Pool;
-   `blob.toFile(path)` / documented fs-pipeline recipe.
+~~7. core `autoUpgradeReadOnly`~~ — SHIPPED 2026-07-13: opt-in (per-tx or
+   connection default, per-tx wins) RO→RW auto-upgrade in core's own API. On
+   isc_read_only_trans (335544361) in `tx.query/run/execute`: commit the
+   write-free RO tx, reopen read-write (same isolation), replay the statement
+   ONCE; `tx.autoUpgraded` reports it. Snapshot moves + prior lazy blob
+   handles die (documented). 21 tests.
+~~8. Small DX helpers~~ — SHIPPED 2026-07-13: per-query `fetchSize` (ceiling
+   for the adaptive fetch plan, clamped 1–65535, run + stream paths);
+   `queryOne<T>()` on Attachment/Transaction/Pool/PreparedStatement (first row
+   or undefined — full fetch, use FIRST 1 for big sets); typed rows
+   `query<T>/run<T>/queryStream<T>` + generic `QueryResult<T>` (compile-time
+   only); `Symbol.asyncDispose` on Attachment (disconnect)/Transaction
+   (rollback-unless-finished)/Pool (close)/PreparedStatement (close) — `await
+   using` works, lib gained ESNext.Disposable; `blob.toFile(path)` streaming
+   fs export returning bytes written. 39 tests.
 9. **Drizzle depth**: nested transactions (savepoints — adapter currently
    throws), relational query API, drizzle-kit migrations, RDB$ introspection →
    schema generation.
@@ -241,8 +250,10 @@ encoded — the read+write type system is complete for finite values. Recent
 core additions: blob segment pipelining (32-deep; the 2.8→59 MB/s remote-fetch
 arc, see diary 07-10/11), Legacy_Auth server-initiated fallback, commit-leak
 fix, `ColumnInfo` result metadata (`QueryResult.columns`), abandoned-blob-
-stream close. Blobs stay eager by default (see Design decisions). Core: 379
-tests green on FB3/4/5. Remaining active M6 work: publish
-`@fast-firebird/core`, CI, benchmark expansion, docs polish. Parked work lives
-in the Deferred backlog above. See `diary/2026-07-11.md` and
-`diary/2026-07-13.md`.
+stream close. Blobs stay eager by default (see Design decisions). Core: 752
+tests green on FB3/4/5 (+30 drizzle); GitHub Actions CI in place. Deferred
+backlog #7 (autoUpgradeReadOnly) and #8 (DX helpers: per-query fetchSize,
+queryOne, query<T>, await using, blob.toFile) shipped 2026-07-13. Remaining
+active M6 work: publish `@fast-firebird/core`, benchmark expansion, docs
+polish (README badly behind the feature set). Parked work lives in the
+Deferred backlog above. See `diary/2026-07-11.md` and `diary/2026-07-13.md`.
