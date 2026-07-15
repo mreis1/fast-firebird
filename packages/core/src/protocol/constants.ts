@@ -316,6 +316,17 @@ export const enum Spb {
   utf8_filename = 118,
   dbname = 106,
   expected_db = 124,
+  // Service-action (SpbStart) tags:
+  bkp_file = 5, // isc_spb_bkp_file
+  res_page_size = 10, // isc_spb_res_page_size
+  verbose = 107, // isc_spb_verbose (bare tag)
+  options = 108, // isc_spb_options (IntSpb bitmask)
+}
+
+/** isc_spb_options bitmask values for isc_action_svc_restore. */
+export const enum SvcRestoreFlag {
+  replace = 0x1000, // isc_spb_res_replace
+  create = 0x2000, // isc_spb_res_create
 }
 
 export const enum SvcInfo {
@@ -336,6 +347,8 @@ export const enum SvcInfo {
 }
 
 export const enum SvcAction {
+  backup = 1,
+  restore = 2,
   db_stats = 11,
 }
 

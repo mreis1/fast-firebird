@@ -50,6 +50,12 @@ export class ParamBuffer {
     return this;
   }
 
+  /** tag + raw little-endian int32, NO length byte (SpbStart "IntSpb"). */
+  rawInt32(tag: number, value: number): this {
+    this.parts.push(tag, value & 0xff, (value >> 8) & 0xff, (value >> 16) & 0xff, (value >> 24) & 0xff);
+    return this;
+  }
+
   get length(): number {
     return this.parts.length;
   }

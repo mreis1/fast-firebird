@@ -122,6 +122,12 @@ function parseDecimal(input: string): { neg: boolean; digits: string; exp: numbe
  * precision are round-half-up to fit.
  */
 export function encodeDecFloat(value: string, byteWidth: 8 | 16): Buffer {
+  // Special values: sign + combination field, zero everywhere else
+  // (canonical +/-Infinity and quiet NaN per IEEE 754-2008).
+  const special = value.trim().toLowerCase();
+  if (/^[+-]?(inf|infinity)$/.test(special)) return specialDecFloat(special[0] === '-', 0b11110, byteWidth);
+  if (/^[+-]?nan$/.test(special)) return specialDecFloat(false, 0b11111, byteWidth);
+
   const fmt = byteWidth === 8 ? DEC64 : DEC128;
   const maxDigits = fmt.declets * 3 + 1;
   let { neg, digits, exp } = parseDecimal(value);
@@ -163,6 +169,13 @@ export function encodeDecFloat(value: string, byteWidth: 8 | 16): Buffer {
     buf[i] = Number(v & 0xffn);
     v >>= 8n;
   }
+  return buf;
+}
+
+/** Canonical special encoding: [sign(1)][combo(5)] then all-zero bits. */
+function specialDecFloat(neg: boolean, combo: number, byteWidth: 8 | 16): Buffer {
+  const buf = Buffer.alloc(byteWidth);
+  buf[0] = ((neg ? 1 : 0) << 7) | (combo << 2);
   return buf;
 }
 

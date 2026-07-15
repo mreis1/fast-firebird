@@ -49,3 +49,59 @@ describe.each(SERVERS)('DECFLOAT/INT128 write path on Firebird $version', ({ por
     expect(rows[1]!.D34).toBe('10000000000');
   });
 });
+
+describe.each(SERVERS)('DECFLOAT special values (Inf/NaN) on Firebird $version', ({ port, version }) => {
+  let db: Attachment;
+  const table = `T_DECS_${version}`;
+
+  beforeAll(async () => {
+    db = await freshDb(port);
+    await ddl(db, `recreate table ${table} (id integer not null primary key, d34 decfloat(34), d16 decfloat(16))`);
+  }, HOOK_TIMEOUT);
+
+  afterAll(async () => {
+    await db?.dropDatabase();
+  });
+
+  it('decodes server-side Infinity/-Infinity/NaN literals', async () => {
+    const [r] = await db.query(
+      `select cast('Infinity' as decfloat(34)) as pos,
+              cast('-Infinity' as decfloat(34)) as neg,
+              cast('NaN' as decfloat(34)) as nn,
+              cast('Infinity' as decfloat(16)) as pos16
+         from rdb$database`,
+    );
+    expect(r!.POS).toBe('Infinity');
+    expect(r!.NEG).toBe('-Infinity');
+    expect(r!.NN).toBe('NaN');
+    expect(r!.POS16).toBe('Infinity');
+  });
+
+  it('round-trips special values as string params through a table', async () => {
+    await db.execute(`insert into ${table} (id, d34, d16) values (?, ?, ?)`, [1, 'Infinity', '-Infinity']);
+    await db.execute(`insert into ${table} (id, d34, d16) values (?, ?, ?)`, [2, 'NaN', 'NaN']);
+    const rows = await db.query(`select d34, d16 from ${table} order by id`);
+    expect(rows).toEqual([
+      { D34: 'Infinity', D16: '-Infinity' },
+      { D34: 'NaN', D16: 'NaN' },
+    ]);
+  });
+
+  it('binds JS Infinity/NaN numbers to DECFLOAT columns', async () => {
+    await db.execute(`insert into ${table} (id, d34, d16) values (?, ?, ?)`, [3, Infinity, -Infinity]);
+    await db.execute(`insert into ${table} (id, d34) values (?, ?)`, [4, NaN]);
+    const rows = await db.query(`select d34, d16 from ${table} where id in (3, 4) order by id`);
+    expect(rows).toEqual([
+      { D34: 'Infinity', D16: '-Infinity' },
+      { D34: 'NaN', D16: null },
+    ]);
+  });
+
+  it('specials sort in Firebird total order (…< +Inf < NaN) — encodings are canonical', async () => {
+    // Equality comparisons on NaN would raise Firebird's DECFLOAT trap; the
+    // ORDER BY total order is trap-free and proves the server accepted our
+    // canonical special encodings. Rows: 1=Inf, 2=NaN, 3=Inf, 4=NaN.
+    const rows = await db.query(`select id from ${table} order by d34, id`);
+    expect(rows.map((r) => r.ID)).toEqual([1, 3, 2, 4]);
+  });
+});

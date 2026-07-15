@@ -33,6 +33,8 @@ export class Transaction {
   /** Bumped on restart so lazy blob handles from a prior cycle read as dead. */
   private generation = 0;
   private wasAutoUpgraded = false;
+  /** Current nested-savepoint depth (names reuse per depth: FF_SP_1, FF_SP_2 …). */
+  private spDepth = 0;
 
   constructor(
     private readonly att: Attachment,
@@ -135,6 +137,45 @@ export class Transaction {
     if (!this.finished) await this.rollback();
   }
 
+  /**
+   * Run `fn` inside a SAVEPOINT (a nested transaction): released on success,
+   * rolled back to on error — the outer transaction survives either way.
+   * Nests arbitrarily (savepoint names are depth-based). `fn` receives THIS
+   * transaction: statements always run on the one server transaction.
+   *
+   * ```ts
+   * await db.transaction(async (tx) => {
+   *   await tx.execute('insert into audit values (?)', [1]);
+   *   await tx.transaction(async () => {              // savepoint scope
+   *     await tx.execute('insert into risky values (?)', [2]);
+   *     throw new Error('undo just the inner part');
+   *   }).catch(() => {});
+   *   // audit row survives; risky row was rolled back
+   * });
+   * ```
+   */
+  async transaction<T>(fn: (tx: Transaction) => Promise<T>): Promise<T> {
+    this.assertActive();
+    const name = `FF_SP_${++this.spDepth}`;
+    try {
+      await this.execute(`SAVEPOINT ${name}`);
+      const result = await fn(this);
+      await this.execute(`RELEASE SAVEPOINT ${name}`);
+      return result;
+    } catch (err) {
+      if (!this.finished) {
+        try {
+          await this.execute(`ROLLBACK TO SAVEPOINT ${name}`);
+        } catch {
+          /* surface the original error */
+        }
+      }
+      throw err;
+    } finally {
+      this.spDepth--;
+    }
+  }
+
   async commit(): Promise<void> {
     this.assertActive();
     this.finished = true;
@@ -203,6 +244,7 @@ export class Transaction {
     }
     this.currentHandle = await this.att.withLock(() => startTransaction(this.att.wire, this.att.dbHandle, this.options));
     this.generation++;
+    this.spDepth = 0; // savepoints died with the previous server transaction
     this.finished = false;
   }
 }

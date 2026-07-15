@@ -46,7 +46,7 @@ zone preserved), rides FB5 inline blobs, and ships the surrounding pieces —
 backpressured streaming, events, the Services API, a connection pool, a script
 parser, and a Drizzle ORM adapter — in one coherent package.
 
-The engineering is test-driven against real servers: **752 core tests + 30
+The engineering is test-driven against real servers: **784 core tests + 66
 Drizzle tests** run in CI against a real Firebird 3/4/5 container matrix, many
 of them asserting exact wire round-trip counts, byte-exact blob content
 (SHA-verified), and error-path connection reuse. Design trade-offs are
@@ -62,8 +62,8 @@ transaction scoping, the statement-cache metadata-pinning caveat), and the
 - **Streaming** — `queryStream` async iterator with batch-level backpressure
 - **Blobs** — eager or lazy (per subtype, per column), 64KB segments with cross-blob pipelining, partial reads (`head()`) with resume, streaming reads/writes, read-ahead for streams, batch prefetch, `toFile()`, FB5 inline blobs (small blobs cost zero round trips)
 - **Types** — every scalar type including DECFLOAT(16/34), INT128, and zone-preserving `ZonedDate`
-- **Transactions** — isolation/read-only/lock-wait options, `restart()`, opt-in RO→RW auto-upgrade, `await using` support
-- **Ecosystem** — connection pool, `POST_EVENT` listener, Services API, isql-faithful script parser, Drizzle ORM adapter, legacy `CHARSET NONE` transcoding toolkit
+- **Transactions** — isolation/read-only/lock-wait options, `restart()`, nested transactions via savepoints, opt-in RO→RW auto-upgrade, `await using` support
+- **Ecosystem** — connection pool, `POST_EVENT` listener, Services API (server info, gstat, gbak backup/restore), isql-faithful script parser, Drizzle ORM adapter (with nested transactions, plain-SQL migrator, RDB$ introspection → schema codegen), legacy `CHARSET NONE` transcoding toolkit
 
 ## Queries
 
@@ -140,6 +140,23 @@ await tx.commit();
 `restart` reuses the same `Transaction` object (its `handle` changes) — handy
 for long-running loops that periodically checkpoint. Lazy blob handles from
 before a restart become invalid (reading one throws `FirebirdBlobError`).
+
+### Nested transactions (savepoints)
+
+`tx.transaction(fn)` runs `fn` inside a SAVEPOINT: released on success,
+rolled back to on error — the outer transaction survives either way, and
+scopes nest arbitrarily:
+
+```ts
+await db.transaction(async (tx) => {
+  await tx.execute('insert into audit (msg) values (?)', ['always kept']);
+  await tx.transaction(async () => {
+    await tx.execute('insert into risky (x) values (?)', [1]);
+    throw new Error('undo just this part');
+  }).catch(() => {});
+  // the audit row survives; the risky row was rolled back
+});
+```
 
 ### `await using` (explicit resource management)
 
@@ -329,7 +346,9 @@ await db.execute('insert into events (ts) values (?)',
 Named zones come from a table generated from the Firebird source (637 zones,
 tzdata 2026b); offsets decode as `±HH:MM`. Connection-level option (column
 readers are cached per statement). DECFLOAT and INT128 are likewise fully
-supported in both directions (strings/bigints bind losslessly).
+supported in both directions (strings/bigints bind losslessly), including the
+DECFLOAT specials — `'Infinity'`, `'-Infinity'` and `'NaN'` decode as those
+strings and bind back as parameters (JS `Infinity`/`NaN` numbers work too).
 
 ## Prepared statements & the statement cache
 
@@ -412,8 +431,35 @@ const rows = await orm.select().from(users).where(eq(users.id, 1));
 
 Firebird is Postgres-shaped, so the adapter reuses Drizzle's pg-core query
 builder with a Firebird dialect (parameter binding, `FIRST/SKIP` pagination,
-`RETURNING`) and Firebird-correct date/time/blob column types. 30 integration
-tests against FB 3/4/5.
+`RETURNING`) and Firebird-correct date/time/blob column types. Nested
+`tx.transaction()` works via savepoints. 66 integration tests against FB 3/4/5.
+
+**Relational queries**: flat `db.query.users.findMany()`/`findFirst()`
+(columns/where/orderBy/limit/offset) work — they compile to plain selects.
+Nested `with:` is rejected with guidance: it requires JSON aggregation
+functions Firebird doesn't have; use explicit joins instead.
+
+**Migrations**: drizzle-kit can't generate for Firebird, so the package ships
+a plain-SQL migrator — `.sql` files applied in name order, recorded in a
+tracking table, full isql syntax per file (incl. `SET TERM`/PSQL). Statements
+commit individually (isql AUTODDL-style — Firebird DML can't see a table
+created in the same uncommitted transaction), so keep migrations small and
+idempotent:
+
+```ts
+import { migrate } from '@fast-firebird/drizzle';
+await migrate(orm, { migrationsFolder: './migrations' }); // 0001_init.sql, 0002_…
+```
+
+**Introspection**: generate a Drizzle schema from an existing database's RDB$
+metadata (tables, column types incl. NUMERIC precision/scale and blob
+subtypes, nullability, single & composite primary keys):
+
+```ts
+import { introspectDatabase, generateDrizzleSchema } from '@fast-firebird/drizzle';
+const tables = await introspectDatabase(att);
+await fs.writeFile('schema.ts', generateDrizzleSchema(tables));
+```
 
 ## Multi-statement scripts
 
@@ -459,6 +505,12 @@ import { connectService } from '@fast-firebird/core';
 const svc = await connectService({ host, user: 'SYSDBA', password: 'masterkey' });
 const info = await svc.getServerInfo();      // version, implementation, security db
 const stats = await svc.getStatistics('/data/app.fdb');  // gstat output
+
+// Server-side gbak (both paths are SERVER paths); returns the verbose log.
+await svc.backup('/data/app.fdb', '/backups/app.fbk');
+await svc.restore('/backups/app.fbk', '/data/app_copy.fdb');            // create
+await svc.restore('/backups/app.fbk', '/data/app.fdb', { replace: true }); // overwrite
+
 await svc.disconnect();
 ```
 
@@ -539,7 +591,7 @@ default (SRP256 + `op_crypt`); pass `wireCrypt: 'disabled'` to match.
   `FirebirdError`.
 - **Charset layer resolved at prepare time**: zero per-cell branching; UTF8 and
   latin1 use native Buffer fast paths, everything else iconv-lite.
-- **Tested against real servers**: 752 core + 30 Drizzle tests across a
+- **Tested against real servers**: 784 core + 66 Drizzle tests across a
   Firebird 3/4/5 (+ Legacy_Auth) Docker matrix, in CI on every push — the same
   compose file as local development, so the environments cannot drift.
 
@@ -576,5 +628,4 @@ the identical compose matrix.
 
 Core protocol work (M0–M5) and the ecosystem milestone (M6) are essentially
 complete; see `plans/000-roadmap.md` for the live roadmap, the design-decision
-log, and the deferred backlog (savepoints for Drizzle, gbak service actions,
-FB 2.5 legacy protocols, …).
+log, and the deferred backlog.

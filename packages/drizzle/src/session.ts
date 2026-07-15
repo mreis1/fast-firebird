@@ -138,7 +138,7 @@ export class FirebirdSession<
         this.schema,
         coreTx,
       );
-      const tx = new FirebirdTransaction<TFullSchema>(this.dialect as PgDialect, txSession, this.schema as never);
+      const tx = new FirebirdTransaction<TFullSchema>(this.dialect as PgDialect, txSession, this.schema as never, coreTx);
       return transaction(tx as PgTransaction<FirebirdQueryResultHKT, TFullSchema, never>);
     }, toCoreTxOptions(config));
   }
@@ -147,8 +147,32 @@ export class FirebirdSession<
 export class FirebirdTransaction<
   TFullSchema extends Record<string, unknown> = Record<string, never>,
 > extends PgTransaction<FirebirdQueryResultHKT, TFullSchema, never> {
-  override async transaction<T>(_transaction: (tx: FirebirdTransaction<TFullSchema>) => Promise<T>): Promise<T> {
-    throw new Error('Nested transactions (savepoints) are not yet supported by @fast-firebird/drizzle');
+  constructor(
+    private readonly fbDialect: PgDialect,
+    private readonly fbSession: FirebirdSession<TFullSchema, Record<string, never>>,
+    private readonly fbSchema: never,
+    /** The core transaction all statements run on (savepoints nest on it). */
+    private readonly coreTx: CoreTransaction,
+    private readonly fbNestedIndex = 0,
+  ) {
+    super(fbDialect, fbSession as never, fbSchema, fbNestedIndex);
+  }
+
+  /**
+   * Nested transaction = SAVEPOINT on the same core transaction: released on
+   * success, rolled back to on error (the outer transaction survives).
+   */
+  override async transaction<T>(transaction: (tx: FirebirdTransaction<TFullSchema>) => Promise<T>): Promise<T> {
+    return this.coreTx.transaction(async () => {
+      const nested = new FirebirdTransaction<TFullSchema>(
+        this.fbDialect,
+        this.fbSession,
+        this.fbSchema,
+        this.coreTx,
+        this.fbNestedIndex + 1,
+      );
+      return transaction(nested);
+    });
   }
 }
 

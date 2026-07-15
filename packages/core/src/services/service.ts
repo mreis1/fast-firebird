@@ -1,7 +1,7 @@
 import { Transport } from '../protocol/transport.js';
 import { WireConnection } from '../protocol/wire.js';
 import { performHandshake, readResponseWithAuth } from '../protocol/handshake.js';
-import { Info, Op, SERVICE_MGR, Spb, SvcAction, SvcInfo } from '../protocol/constants.js';
+import { Info, Op, SERVICE_MGR, Spb, SvcAction, SvcInfo, SvcRestoreFlag } from '../protocol/constants.js';
 import { ParamBuffer } from '../protocol/buffers.js';
 import { resolveOptions, type FirebirdConnectionOptions, type LegacyOptionAliases } from '../api/options.js';
 
@@ -111,6 +111,43 @@ export class Service {
     const spb = new ParamBuffer();
     spb.tag(SvcAction.db_stats);
     spb.string2(Spb.dbname, database);
+    await this.serviceStart(spb.toBuffer());
+    return this.collectOutput();
+  }
+
+  /**
+   * Back up a database with server-side gbak. BOTH paths are SERVER paths —
+   * the .fbk is written on the server machine, not transferred to the
+   * client. Runs verbose and drains the gbak log to completion (the log is
+   * returned) — that is also what signals the service is done.
+   */
+  async backup(database: string, backupFile: string): Promise<string> {
+    const spb = new ParamBuffer();
+    spb.tag(SvcAction.backup);
+    spb.string2(Spb.dbname, database);
+    spb.string2(Spb.bkp_file, backupFile);
+    spb.tag(Spb.verbose);
+    await this.serviceStart(spb.toBuffer());
+    return this.collectOutput();
+  }
+
+  /**
+   * Restore a server-side .fbk into a database (both paths on the server).
+   * Creates the target by default (fails if it exists); `replace: true`
+   * overwrites an existing database. Returns the verbose gbak log.
+   */
+  async restore(
+    backupFile: string,
+    database: string,
+    options: { replace?: boolean; pageSize?: number } = {},
+  ): Promise<string> {
+    const spb = new ParamBuffer();
+    spb.tag(SvcAction.restore);
+    spb.string2(Spb.bkp_file, backupFile);
+    spb.string2(Spb.dbname, database);
+    spb.rawInt32(Spb.options, options.replace ? SvcRestoreFlag.replace : SvcRestoreFlag.create);
+    if (options.pageSize) spb.rawInt32(Spb.res_page_size, options.pageSize);
+    spb.tag(Spb.verbose);
     await this.serviceStart(spb.toBuffer());
     return this.collectOutput();
   }

@@ -6,7 +6,15 @@ export { FirebirdSession, FirebirdTransaction, FirebirdPreparedQuery } from './s
 // table factory and the value-round-tripping column types are reused directly.
 // `firebirdTable` is `pgTable` (Firebird has no schemas). See ./columns for
 // Firebird-specific date/time/blob types with correct value mapping.
-export { pgTable as firebirdTable } from 'drizzle-orm/pg-core';
+export { migrate, type MigrateConfig, type MigrateResult } from './migrator.js';
+export {
+  introspectDatabase,
+  generateDrizzleSchema,
+  type IntrospectedTable,
+  type IntrospectedColumn,
+} from './introspect.js';
+
+export { pgTable as firebirdTable, primaryKey } from 'drizzle-orm/pg-core';
 export {
   integer,
   smallint,

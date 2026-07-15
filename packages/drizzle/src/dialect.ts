@@ -121,4 +121,22 @@ export class FirebirdDialect extends PgDialect {
     const body = sql.join(selects, sql` union all `);
     return sql`insert into ${table} ${insertOrder} ${body}`;
   }
+
+  /**
+   * Relational queries: FLAT `findMany`/`findFirst` (columns/where/orderBy/
+   * limit/offset) compile to plain selects and work. Nested `with:` relies on
+   * Postgres JSON aggregation (`json_build_array`/lateral joins) that Firebird
+   * doesn't have — fail fast with guidance instead of a server "Token unknown".
+   */
+  override buildRelationalQueryWithoutPK(
+    params: Parameters<PgDialect['buildRelationalQueryWithoutPK']>[0],
+  ): ReturnType<PgDialect['buildRelationalQueryWithoutPK']> {
+    const cfg = params.queryConfig;
+    if (typeof cfg === 'object' && cfg !== null && cfg.with && Object.keys(cfg.with).length > 0) {
+      throw new Error(
+        "Firebird has no JSON aggregation, so relational `with:` queries cannot be generated — use explicit joins (db.select().from(a).leftJoin(b, …)) or separate queries. Flat findMany/findFirst (columns/where/orderBy/limit) are supported.",
+      );
+    }
+    return super.buildRelationalQueryWithoutPK(params);
+  }
 }

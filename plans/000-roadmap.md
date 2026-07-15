@@ -223,17 +223,34 @@ only when API surface stabilizes (avoid premature package fragmentation).
    (rollback-unless-finished)/Pool (close)/PreparedStatement (close) — `await
    using` works, lib gained ESNext.Disposable; `blob.toFile(path)` streaming
    fs export returning bytes written. 39 tests.
-9. **Drizzle depth**: nested transactions (savepoints — adapter currently
-   throws), relational query API, drizzle-kit migrations, RDB$ introspection →
-   schema generation.
-10. **Services actions**: backup/restore (gbak) via service start+output —
-   plumbing (SPB, collectOutput) already exists.
-11. **DECFLOAT special values** — Inf/NaN decode; encode rejects them (finite
-   round-trip complete).
-12. **Protocol 10–12 / FB 2.5 legacy support** — EOL upstream; only if a
-   migration demands it.
-13. **Native/WASM acceleration** (SIMD UTF-8, decimal128) — only if benchmarks
-   prove the need (`plans/architecture.md`).
+~~9. Drizzle depth~~ — SHIPPED 2026-07-15: core `tx.transaction(fn)` savepoint
+   scopes (depth-named FF_SP_n, release-on-success / rollback-to-on-error,
+   reset on restart) + drizzle nested `tx.transaction()` on top; plain-SQL
+   migrator (`migrate(orm, {migrationsFolder})`, tracking table, AUTODDL-style
+   per-statement commits — Firebird DML can't see same-tx DDL, verified);
+   RDB$ introspection → `introspectDatabase` + `generateDrizzleSchema`
+   (types incl. NUMERIC prec/scale, blob subtypes, composite PKs). Relational
+   API boundary DECIDED: flat findMany/findFirst work (plain selects);
+   nested `with:` needs JSON aggregation Firebird lacks → clear driver-side
+   error with join guidance (dialect override). 36 new drizzle tests (66
+   total) + 18 core savepoint tests.
+~~10. Services actions~~ — SHIPPED 2026-07-15: `svc.backup(db, fbk)` /
+   `svc.restore(fbk, db, {replace?, pageSize?})` — server-side gbak, always
+   verbose (output drain doubles as completion signal), create-by-default
+   restore. SpbStart IntSpb (`rawInt32`: tag + raw LE, no length byte).
+   Constants verified against consts_pub.h (replace=0x1000, create=0x2000).
+   6 tests incl. full backup→restore→query round trip.
+~~11. DECFLOAT special values~~ — SHIPPED 2026-07-15: decode already handled
+   ±Infinity/NaN; encode now emits canonical specials (sign+combo, zero
+   payload) so 'Infinity'/'-Infinity'/'NaN' strings AND JS Infinity/NaN
+   numbers bind as params. Caveat found: server-side equality comparisons on
+   NaN raise Firebird's DECFLOAT trap (server default, not driver). 8 tests.
+12. ~~Protocol 10–12 / FB 2.5 legacy support~~ — **WONT DO** (decided
+   2026-07-15): EOL upstream, out of scope unless a real migration makes it
+   unavoidable.
+13. ~~Native/WASM acceleration~~ (SIMD UTF-8, decimal128) — **WONT DO**
+   (decided 2026-07-15): out of scope unless benchmarks prove a hard need
+   (`plans/architecture.md`).
 
 ## Testing strategy
 - Unit: XDR, SRP vectors, type codec, charset, script parser — no server needed.
@@ -250,11 +267,11 @@ encoded — the read+write type system is complete for finite values. Recent
 core additions: blob segment pipelining (32-deep; the 2.8→59 MB/s remote-fetch
 arc, see diary 07-10/11), Legacy_Auth server-initiated fallback, commit-leak
 fix, `ColumnInfo` result metadata (`QueryResult.columns`), abandoned-blob-
-stream close. Blobs stay eager by default (see Design decisions). Core: 752
-tests green on FB3/4/5 (+30 drizzle); GitHub Actions CI in place. Deferred
-backlog #7 (autoUpgradeReadOnly) and #8 (DX helpers: per-query fetchSize,
-queryOne, query<T>, await using, blob.toFile) shipped 2026-07-13. Remaining
-active M6 work: publish `@fast-firebird/core`, benchmark expansion. README
-fully caught up 2026-07-15 (all shipped features documented + ecosystem
-positioning section, open-source-ready). Parked work lives in the Deferred
-backlog above. See `diary/2026-07-11.md` and `diary/2026-07-13.md`.
+stream close. Blobs stay eager by default (see Design decisions). Core: 784
+tests green on FB3/4/5 (+66 drizzle); GitHub Actions CI in place. Deferred
+backlog CLOSED except by decision: #1–11 shipped (blob suite, TZ types,
+autoUpgradeReadOnly, DX helpers, Drizzle depth, gbak services, DECFLOAT
+specials); #12 FB2.5 + #13 native/WASM flagged WONT DO. Remaining active M6
+work: publish `@fast-firebird/core`, benchmark expansion. README fully caught
+up 2026-07-15 (all shipped features + ecosystem positioning,
+open-source-ready). See `diary/2026-07-13.md` and `diary/2026-07-15.md`.
