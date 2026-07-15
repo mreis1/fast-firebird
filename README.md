@@ -4,17 +4,9 @@
 
 <p align="center">
   A next-generation Firebird SQL driver for Node.js — <b>pure TypeScript</b>, zero native
-  dependencies, speaking the Firebird wire protocol directly (protocol 13–16) with
+  dependencies, speaking the Firebird wire protocol directly (protocols 13–19) with
   first-class support for <b>Firebird 3, 4, and 5</b>.
 </p>
-
-> **Status: early but real.** Connect (SRP256/Srp auth; Arc4/ChaCha wire
-> encryption; zlib compression), transactions, a statement cache, prepared
-> statements, all scalar types, text & binary blobs, adaptive fetching, row
-> streaming, connection pooling, and the legacy `CHARSET NONE` toolkit are
-> implemented and verified by 248 tests against real FB 3/4/5 servers.
-> Events (`POST_EVENT`), the Services API, and a multi-statement script parser
-> round out M5. See `plans/000-roadmap.md` for what's next.
 
 ```ts
 import { connect } from '@fast-firebird/core';
@@ -25,128 +17,111 @@ const db = await connect({
   database: '/data/app.fdb',
   user: 'SYSDBA',
   password: 'masterkey',
-  charset: 'UTF8',
 });
 
 const rows = await db.query('select id, name from users where id = ?', [1]);
+const one  = await db.queryOne<{ ID: number; NAME: string }>('select id, name from users where id = ?', [1]);
 
 await db.transaction(async (tx) => {
   await tx.execute('insert into users (id, name) values (?, ?)', [2, 'Alice']);
 });
 
-await db.disconnect();
+await db.disconnect();      // or: await using db = await connect({ … })
 ```
 
-## Legacy `CHARSET NONE` databases (the € problem)
+## Why another Firebird driver?
 
-Databases declared `NONE` whose bytes were written as Windows-1252 by legacy
-(Delphi) software round-trip cleanly:
+The existing Node.js options each stop short in a different place, and both are
+projects we learned a lot from. `node-firebird` is pure JavaScript but grew up
+in the callback era, and its coverage of newer server features and types is
+partial. `node-firebird-driver-native` is well-engineered but binds to the
+native `fbclient` library, which complicates containers, serverless platforms,
+and simple onboarding.
+
+fast-firebird aims to be the option that doesn't stop short: a pure-TypeScript,
+promise-native driver that speaks the modern wire protocol (up to protocol 19)
+with Srp256 authentication and Arc4/ChaCha wire encryption, covers the full
+FB4/5 type system (DECFLOAT, INT128, `TIMESTAMP/TIME WITH TIME ZONE` with the
+zone preserved), rides FB5 inline blobs, and ships the surrounding pieces —
+backpressured streaming, events, the Services API, a connection pool, a script
+parser, and a Drizzle ORM adapter — in one coherent package.
+
+The engineering is test-driven against real servers: **752 core tests + 30
+Drizzle tests** run in CI against a real Firebird 3/4/5 container matrix, many
+of them asserting exact wire round-trip counts, byte-exact blob content
+(SHA-verified), and error-path connection reuse. Design trade-offs are
+documented where you'll hit them (eager-by-default blobs, lazy-handle
+transaction scoping, the statement-cache metadata-pinning caveat), and the
+`plans/` and `diary/` directories record the *why* behind every decision.
+
+## Feature overview
+
+- **Connectivity** — SRP256/Srp/Legacy_Auth, Arc4/ChaCha/ChaCha64 wire crypt, zlib wire compression, connect timeouts covering the whole handshake
+- **Queries** — promise API (`query`, `queryOne`, `run`, `execute`), typed rows `query<T>()`, prepared statements, per-connection LRU statement cache, adaptive batched fetching with per-query `fetchSize`
+- **Result shaping** — `ColumnInfo` metadata, `rowMode: 'array'`, `exclude`/`only` column filters, `expandStar` (`select *` rewritten to explicit columns before prepare)
+- **Streaming** — `queryStream` async iterator with batch-level backpressure
+- **Blobs** — eager or lazy (per subtype, per column), 64KB segments with cross-blob pipelining, partial reads (`head()`) with resume, streaming reads/writes, read-ahead for streams, batch prefetch, `toFile()`, FB5 inline blobs (small blobs cost zero round trips)
+- **Types** — every scalar type including DECFLOAT(16/34), INT128, and zone-preserving `ZonedDate`
+- **Transactions** — isolation/read-only/lock-wait options, `restart()`, opt-in RO→RW auto-upgrade, `await using` support
+- **Ecosystem** — connection pool, `POST_EVENT` listener, Services API, isql-faithful script parser, Drizzle ORM adapter, legacy `CHARSET NONE` transcoding toolkit
+
+## Queries
+
+### Rows, first-row, typed rows
 
 ```ts
-const db = await connect({
-  database: '/data/legacy.fdb',
-  charset: 'NONE',
-  charsetNoneEncoding: 'win1252',        // simple strategy
-  // or full control (node-firebird2-compatible):
-  // transcodeAdapter: { text: { fromDb: b => iconv.decode(b, 'win1252'),
-  //                             toDb:  s => iconv.encode(s, 'win1252') } },
-  // or per-field:
-  // charsetOverrides: { 'HISTORY.MEMO': 'win1252' },
-});
+const rows = await db.query('select id, name from users');            // Row[]
+const user = await db.queryOne('select * from users where id = ?', [7]); // Row | undefined
+const { rows: r, rowsAffected, columns } = await db.run('update t set x = 1');
 
-const rows = await db.query("select memo from history where memo like ?", ['%€%']);
+// Compile-time row typing (no runtime validation):
+interface User { ID: number; NAME: string }
+const typed = await db.query<User>('select id, name from users');
+typed[0].NAME; // string
 ```
 
-## Monorepo layout
+`queryOne` returns the first row or `undefined` — the full result set is still
+fetched, so add `FIRST 1` (or a unique predicate) when many rows could match.
 
-```
-packages/core          @fast-firebird/core — the wire-protocol driver
-plans/                 living design docs (architecture, performance, charsets, …)
-plans/research/        protocol notes extracted from node-firebird(2), jaybird,
-                       rsfbclient and the Firebird core source
-diary/                 daily engineering log
-docker/                isolated FB 3/4/5 test matrix (compose project fast-firebird-test)
-scripts/               codegen + safe docker cleanup
-```
+### Column metadata & array rows
 
-## Development
-
-```sh
-pnpm install
-pnpm fb:up            # start isolated Firebird 3/4/5 containers (ports 30503-30505)
-pnpm test             # unit + integration
-pnpm fb:down          # remove ONLY this project's containers/volumes/network
-```
-
-Docker usage follows strict isolation rules (`plans/docker-safety.md`): every
-resource is named `fast-firebird-test-*`, cleanup is scoped to the compose
-project, and no global prune command is ever used.
-
-## Prepared statements & the statement cache
-
-Every connection keeps an LRU cache of prepared statements keyed by SQL text
-(`statementCacheSize`, default 64; `0` disables). Measured round trips,
-asserted by integration tests on FB 3/4/5:
-
-| Operation (inside an open transaction) | Round trips |
-|-----------------------------------------|-------------|
-| cold query (prepare → rows)             | 2           |
-| warm query, ≤ `fetchSize` rows          | **1** (execute + fetch coalesced) |
-| warm DML including affected count       | **1** (execute + counts coalesced) |
-
-For hot paths you can also pin a statement explicitly:
+Every `run()`/`QueryResult` carries `columns: ColumnInfo[]` — the row key
+(alias-aware), underlying field, source relation, friendly SQL type name, and
+nullability, exactly as the columns appear in the rows:
 
 ```ts
-const stmt = await db.prepare('select name from users where id = ?');
-const rows = await stmt.query([42], tx); // 1 round trip per execution
-await stmt.close();
+const { rows, columns } = await db.run('select * from invoices', [], { rowMode: 'array' });
+// columns[i].name is the positional header for rows[n][i]
 ```
 
-> **Metadata-lock caveat** (standard Firebird behavior): a prepared statement —
-> cached or pinned — holds existence locks on the objects it references, so
-> DDL on those tables from *other* connections waits until the statement is
-> released. DDL executed through the same connection clears the cache
-> automatically. Set `statementCacheSize: 0` if your workload mixes long-lived
-> connections with external migrations.
+`rowMode: 'array'` preserves duplicate/aliased column names positionally —
+intended for ORM adapters and grid UIs.
 
-## Performance vs node-firebird
-
-Measured against `node-firebird` 1.1.10 on Firebird 5 with an in-process
-latency proxy (`pnpm --filter @fast-firebird/benchmarks bench`), defaults vs
-defaults:
-
-| Scenario | 0ms | 10ms RTT link |
-|---|---|---|
-| warm select ×200 (open tx) | 3.0× | 2.9× |
-| 10k-row scan | 1.0× | 1.8× |
-| 300-row insert (1 tx) | 2.6× | 2.0× |
-| **1MB blob write+read** | **14×** | **44×** |
-
-Blobs dominate because legacy drivers use 1KB segments (~1000 round trips per
-MB); fast-firebird uses 64KB segments by default. The one case where
-fast-firebird is slower — bare connect — is because it encrypts the wire by
-default (SRP256 + `op_crypt`); pass `wireCrypt: 'disabled'` to match.
-
-## Streaming large result sets
-
-`queryStream` yields rows lazily in adaptively-sized batches — the next
-`op_fetch` only fires as you consume, so a huge table never lands in memory at
-once and an early `break` stops after just a batch or two:
+### Column filtering & `select *` expansion
 
 ```ts
-for await (const row of db.queryStream('select * from big_table order by id')) {
-  process(row);            // backpressure-friendly; break any time
-}
-
-// Node stream ergonomics:
-import { Readable } from 'node:stream';
-const stream = Readable.from(db.queryStream('select * from big_table'));
+await db.query('select * from docs', [], { exclude: ['PHOTO'] });   // or { only: [...] }
+await db.query('select * from docs', [], { exclude: ['PHOTO'], expandStar: true });
 ```
 
-`db.queryStream` runs in its own transaction (committed at end, rolled back on
-error/break); `tx.queryStream` streams within a transaction you own. Don't run
-other statements on the *same* connection mid-stream — use another connection
-or the pool for concurrency.
+Without `expandStar`, `exclude`/`only` filter at decode time (blob columns are
+then never fetched, scalars still cross the wire). With `expandStar: true` the
+driver rewrites top-level `*` / `alias.*` / `table.*` into an explicit column
+list *before* preparing, so excluded columns are genuinely never sent by the
+server. Rewrites cost one extra prepare per unique (sql, only, exclude), are
+cached, and are invalidated by DDL. Top-level `UNION` is not supported, and
+Firebird itself rejects a bare `*` mixed with other select items — qualify it
+(`select t.*, 1 as x from t`).
+
+### Per-query fetch sizing
+
+```ts
+await db.query('select * from wide_rows', [], { fetchSize: 50 });
+```
+
+Fetching is adaptive by default (batches sized from the described row width
+against a byte budget, ramping up across a scan). `fetchSize` — per connection
+or per query — is the ceiling on rows per fetch round trip.
 
 ## Transactions
 
@@ -163,41 +138,225 @@ await tx.commit();
 ```
 
 `restart` reuses the same `Transaction` object (its `handle` changes) — handy
-for long-running loops that periodically checkpoint. It commits by default;
-pass `action: 'rollback'` to discard. Lazy blob handles from before a restart
-become invalid (reading one throws `FirebirdBlobError`).
+for long-running loops that periodically checkpoint. Lazy blob handles from
+before a restart become invalid (reading one throws `FirebirdBlobError`).
 
-## Blobs: eager (default) or lazy handles
+### `await using` (explicit resource management)
 
-By default blob columns are materialized (Buffer, or decoded string for
-subtype-1 text). For big/optional blobs, `blobs: 'lazy'` returns a `Blob`
-handle per non-null cell — nothing is fetched until you ask, so blobs you
-don't touch cost **zero** round trips:
+`Attachment`, `Transaction`, `Pool`, and `PreparedStatement` implement
+`Symbol.asyncDispose`:
+
+```ts
+{
+  await using tx = await db.startTransaction();
+  await tx.execute('insert into t (id) values (1)');
+  await tx.commit();        // without this line, scope exit ROLLS BACK
+}
+```
+
+Disposal semantics: an attachment disconnects, an uncommitted transaction
+rolls back, a pool closes, a prepared statement is freed.
+
+### Read-only auto-upgrade (opt-in)
+
+Some codebases run read-mostly transactions and occasionally write. With
+`autoUpgradeReadOnly` (per transaction, or as a connection-wide default), a
+write that fails with *"attempted update during read-only transaction"* makes
+the driver commit the (write-free) read-only transaction, reopen it read-write
+with the same isolation, and replay that statement once:
+
+```ts
+const tx = await db.startTransaction({ readOnly: true, autoUpgradeReadOnly: true });
+await tx.execute('insert into audit (msg) values (?)', ['late write']); // upgrades + replays
+tx.autoUpgraded; // true
+```
+
+Honest caveats: the upgrade is a real commit + new transaction (the snapshot
+moves forward and earlier lazy blob handles die), and only
+`query`/`run`/`execute` replay — `queryStream` and prepared statements don't.
+Off by default.
+
+## Streaming large result sets
+
+`queryStream` yields rows lazily in adaptively-sized batches — the next
+`op_fetch` only fires as you consume, so a huge table never lands in memory at
+once and an early `break` stops after just a batch or two:
+
+```ts
+for await (const row of db.queryStream<Order>('select * from big_table order by id')) {
+  process(row);            // backpressure-friendly; break any time
+}
+
+// Node stream ergonomics:
+import { Readable } from 'node:stream';
+const stream = Readable.from(db.queryStream('select * from big_table'));
+```
+
+`db.queryStream` runs in its own transaction (committed at end, rolled back on
+error/break); `tx.queryStream` streams within a transaction you own. Don't run
+other statements on the *same* connection mid-stream — use another connection
+or the pool for concurrency.
+
+## Blobs
+
+### Eager by default, lazy on request
+
+By default blob columns are materialized during decode — text blobs (memos)
+arrive as decoded strings, binary blobs as Buffers. This default is
+deliberate: *"SELECT gives me values" is the near-universal driver
+expectation, and lazy leaks transaction-lifetime concerns into ordinary code.*
+
+For big or optional blobs, lazy modes return a `Blob` handle per non-null
+cell — nothing is fetched until you ask, so blobs you don't touch cost
+**zero** round trips:
+
+```ts
+blobs: 'lazy'          // every blob column → Blob handle
+blobs: 'lazy-binary'   // binary blobs lazy, memos eager (the file-export sweet spot)
+blobs: 'lazy-text'     // memos lazy, binary eager
+blobs: { default: 'lazy-binary', eager: ['THUMB'], lazy: ['A.HUGE_XML'] } // per column
+```
+
+Available per query or as a connection default. Column names are alias-aware
+(`'DOC'` or `'A.DOC'`, case-insensitive); naming a column in both lists throws.
 
 ```ts
 await db.transaction(async (tx) => {
-  for await (const row of tx.queryStream('select id, photo, notes from docs', [], { blobs: 'lazy' })) {
-    const notes = await row.NOTES?.text();        // fetched on demand (subtype-1 decoded)
-    // row.PHOTO never touched → never fetched
+  for await (const row of tx.queryStream('select id, photo, notes from docs', [], { blobs: 'lazy-binary' })) {
+    // row.NOTES is already a string (eager memo); row.PHOTO is a Blob handle
+    if (wanted(row.ID)) await (row.PHOTO as Blob).toFile(`out/${row.ID}.jpg`);
   }
 });
-
-// or stream a large blob in backpressured chunks
-await pipeline(row.PHOTO.stream({ chunkSize: 64 * 1024 }), fs.createWriteStream('out.jpg'));
 ```
 
-`Blob` exposes `buffer()` (cached), `text(encoding?)`, `stream({chunkSize})`,
-and `size()`. Handles are **transaction-scoped** — read them before the
-transaction commits (reading a stale handle throws `FirebirdBlobError`). Lazy
-mode therefore requires `tx.query`/`queryStream`; `db.query` with lazy throws.
-Set the default per connection with `connect({ blobs: 'lazy' })`.
+`Blob` handles are **transaction-scoped** — read them before the transaction
+ends (a stale handle throws `FirebirdBlobError`). Lazy-capable configurations
+therefore require `tx.query`/`queryStream`; `db.query` with a lazy config
+throws with guidance.
 
-Skip specific columns without listing all of them (drops them from the row and,
-for blobs, skips fetching entirely in eager mode):
+### Reading: buffer, text, stream, file, size
 
 ```ts
-await db.query('select * from docs', [], { exclude: ['PHOTO'] }); // or { only: ['ID', 'NAME'] }
+const buf  = await blob.buffer();                    // whole blob, cached
+const txt  = await blob.text();                      // subtype-1 decoded via column charset
+const size = await blob.size();                      // op_info_blob, 1 round trip
+const n    = await blob.toFile('/exports/doc.pdf');  // streamed to disk, returns bytes
+
+await pipeline(blob.stream({ chunkSize: 64 * 1024 }), fs.createWriteStream('out.jpg'));
 ```
+
+Streams are backpressured and one-shot; abandoning one (destroy, `break`, or
+error) closes the server-side handle immediately — nothing leaks until
+transaction end.
+
+### Partial reads: `head()` + resume
+
+For magic-number sniffing and content-type detection:
+
+```ts
+const magic = await blob.head(16);      // first 16 bytes, cursor stays open
+if (isPng(magic)) {
+  const all = await blob.buffer();      // RESUMES — no re-open, no re-transfer
+} else {
+  await blob.close();                   // release the cursor early
+}
+```
+
+`head(n)` keeps the server handle open at its position; a later `buffer()`,
+`stream()` or wider `head()` continues from byte n instead of starting over.
+Reading to the end promotes the bytes into the regular cache.
+
+### Writing: Buffers, strings, streams
+
+Blob parameters accept `Buffer`, `string` (encoded via the column charset) —
+or any `Readable`/`AsyncIterable<Buffer | string>`, uploaded in pipelined
+64KB segments without buffering the source in memory:
+
+```ts
+await tx.execute('insert into files (id, doc) values (?, ?)', [1, fs.createReadStream('big.iso')]);
+```
+
+(A lazy `Blob` handle can't be bound directly as a parameter — it would
+deadlock the connection's operation lock; pass `await blob.buffer()`.)
+
+### Performance: pipelining, read-ahead, prefetch, inline
+
+Blob transfer is round-trip-bound, so the driver attacks round trips:
+
+- **64KB segments + cross-blob pipelining** — batch reads keep a deep window
+  of segment requests in flight *across* blobs (openings pipelined ahead,
+  closes deferred), instead of one segment per round trip.
+- **`blobReadAhead`** (lazy blobs in `queryStream`) — while you process row N,
+  the driver prefetches upcoming rows' blob contents in bounded background
+  slices, so `.buffer()/.text()/.stream()` usually resolve without touching
+  the wire. `true` | depth | `{ columns, depth, maxBytes }` (default 16MiB
+  budget), per query or as a connection default; purely an optimization —
+  skipped rows and budget overruns fall back to on-demand reads.
+
+  ```ts
+  for await (const row of tx.queryStream(sql, [], { blobs: 'lazy', blobReadAhead: 2 })) {
+    await (row.DOC as Blob).toFile(path(row));   // usually zero extra round trips
+  }
+  ```
+
+- **`prefetchBlobs(blobs)`** — batch-fetch an explicit set of handles (e.g.
+  every `THUMB` of a page of rows) in one pipelined burst before use.
+- **FB5 inline blobs (protocol 19, Firebird 5.0.2+)** — small blobs/memos ride
+  *with the row data*: zero extra round trips, no opt-in needed. The driver
+  announces `maxInlineBlobSize` (default 65535 bytes, `0` disables) on every
+  execute; received-but-unread inline blobs are budgeted by
+  `maxBlobCacheSize` (default 10MiB) and scoped to their transaction. All
+  read paths — eager, lazy, streams, read-ahead — consult the inline cache
+  first.
+
+## Zone-preserving time zone types (FB4+)
+
+By default, `TIMESTAMP/TIME WITH TIME ZONE` columns decode to JS `Date` — the
+exact UTC instant, zone dropped. Opt in to keep the zone:
+
+```ts
+const db = await connect({ …, timeZones: 'zoned' });
+
+const [row] = await db.query("select ts from events");
+const z = row.TS;            // ZonedDate { date: Date(UTC instant), zone: 'Europe/Lisbon' | '+02:30' }
+z.toString();                // 2026-07-13T14:30:00.000Z[Europe/Lisbon]
+z.date.toLocaleString('pt-PT', { timeZone: z.zone });  // wall-clock rendering via Intl
+
+await db.execute('insert into events (ts) values (?)',
+  [new ZonedDate(new Date('2026-07-13T14:30:00Z'), 'Europe/Lisbon')]);  // round-trips zone + instant
+```
+
+Named zones come from a table generated from the Firebird source (637 zones,
+tzdata 2026b); offsets decode as `±HH:MM`. Connection-level option (column
+readers are cached per statement). DECFLOAT and INT128 are likewise fully
+supported in both directions (strings/bigints bind losslessly).
+
+## Prepared statements & the statement cache
+
+Every connection keeps an LRU cache of prepared statements keyed by SQL text
+(`statementCacheSize`, default 64; `0` disables). Measured round trips,
+asserted by integration tests on FB 3/4/5:
+
+| Operation (inside an open transaction) | Round trips |
+|-----------------------------------------|-------------|
+| cold query (prepare → rows)             | 2           |
+| warm query, one batch                   | **1** (execute + fetch coalesced) |
+| warm DML including affected count       | **1** (execute + counts coalesced) |
+
+For hot paths you can also pin a statement explicitly:
+
+```ts
+await using stmt = await db.prepare('select name from users where id = ?');
+const rows = await stmt.query([42], tx);       // 1 round trip per execution
+const one  = await stmt.queryOne([42], tx);
+```
+
+> **Metadata-lock caveat** (standard Firebird behavior): a prepared statement —
+> cached or pinned — holds existence locks on the objects it references, so
+> DDL on those tables from *other* connections waits until the statement is
+> released. DDL executed through the same connection clears the cache
+> automatically; `db.clearStatementCache()` / `pool.clearStatementCaches()`
+> release the handles explicitly before external migrations.
 
 ## Connection pooling
 
@@ -207,10 +366,11 @@ import { createPool } from '@fast-firebird/core';
 const pool = await createPool({ host, database, user, password, min: 2, max: 10 });
 
 const rows = await pool.query('select * from users where id = ?', [1]); // acquire→run→release
+const one  = await pool.queryOne('select * from users where id = ?', [1]);
 await pool.transaction(async (tx) => { /* … */ });
 await pool.use(async (conn) => { /* borrow explicitly */ });
 
-await pool.close();
+await pool.close();          // or: await using pool = await createPool({ … })
 ```
 
 Each pooled connection is a full `Attachment` with its own statement cache, so
@@ -230,6 +390,30 @@ const parts = await pool.map(idRanges, (conn, range) =>
 
 (A lazy `Blob` handle is bound to the connection+transaction that produced it,
 so parallelize by running the *query* per partition — not by sharing handles.)
+
+## Drizzle ORM adapter
+
+`@fast-firebird/drizzle` plugs the driver into [Drizzle](https://orm.drizzle.team):
+
+```ts
+import { connect } from '@fast-firebird/core';
+import { drizzle, firebirdTable, integer, varchar, timestamp } from '@fast-firebird/drizzle';
+import { eq } from 'drizzle-orm';
+
+const users = firebirdTable('users', {
+  id: integer('id').primaryKey(),
+  name: varchar('name', { length: 40 }),
+  created: timestamp('created'),
+});
+
+const orm = drizzle(await connect({ … }));
+const rows = await orm.select().from(users).where(eq(users.id, 1));
+```
+
+Firebird is Postgres-shaped, so the adapter reuses Drizzle's pg-core query
+builder with a Firebird dialect (parameter binding, `FIRST/SKIP` pagination,
+`RETURNING`) and Firebird-correct date/time/blob column types. 30 integration
+tests against FB 3/4/5.
 
 ## Multi-statement scripts
 
@@ -278,15 +462,35 @@ const stats = await svc.getStatistics('/data/app.fdb');  // gstat output
 await svc.disconnect();
 ```
 
-## Wire encryption & compression
+## Legacy `CHARSET NONE` databases (the € problem)
+
+Databases declared `NONE` whose bytes were written as Windows-1252 by legacy
+(Delphi) software round-trip cleanly:
 
 ```ts
-await connect({ /* … */ wireCrypt: 'required', wireCompression: true });
+const db = await connect({
+  database: '/data/legacy.fdb',
+  charset: 'NONE',
+  charsetNoneEncoding: 'win1252',        // simple strategy
+  // or full control (node-firebird2-compatible):
+  // transcodeAdapter: { text: { fromDb: b => iconv.decode(b, 'win1252'),
+  //                             toDb:  s => iconv.encode(s, 'win1252') } },
+  // or per-field:
+  // charsetOverrides: { 'HISTORY.MEMO': 'win1252' },
+});
+
+const rows = await db.query("select memo from history where memo like ?", ['%€%']);
 ```
 
-## Legacy authentication
+## Authentication, encryption & compression
 
-For migrating from legacy Firebird setups (`AuthServer = Legacy_Auth`):
+`wireCrypt` is `'enabled'` by default (Arc4 negotiated; `'required'` /
+`'disabled'` available). ChaCha/ChaCha64 are negotiated on FB4+ via
+`wireCryptPlugin`. `wireCompression` (zlib) is off by default and requires
+`WireCompression = true` on the server; when both are on, the wire is
+compressed then encrypted, matching fbclient.
+
+For migrating from legacy setups (`AuthServer = Legacy_Auth`):
 
 ```ts
 const db = await connect({
@@ -299,22 +503,78 @@ const db = await connect({
 Uses the DES `crypt(3)` hash (UTF-8 password bytes, matching node-firebird and
 fbclient). SRP256/SRP remain the default for modern servers.
 
-## Wire encryption & compression (continued)
+## Performance vs node-firebird
 
-`wireCrypt` is `'enabled'` by default (Arc4, negotiated); `wireCompression`
-(zlib) is off by default and requires `WireCompression = true` on the server.
-When both are on, the wire is compressed then encrypted, matching fbclient.
+Measured against `node-firebird` 1.1.10 on Firebird 5 with an in-process
+latency proxy (`pnpm --filter @fast-firebird/benchmarks bench`), defaults vs
+defaults:
+
+| Scenario | 0ms | 10ms RTT link |
+|---|---|---|
+| warm select ×200 (open tx) | 3.0× | 2.9× |
+| 10k-row scan | 1.0× | 1.8× |
+| 300-row insert (1 tx) | 2.6× | 2.0× |
+| **1MB blob write+read** | **14×** | **44×** |
+
+Blobs dominate because legacy drivers use 1KB segments (~1000 round trips per
+MB); fast-firebird uses 64KB segments with deep pipelining — and on FB 5.0.2+
+small blobs ride inline with the rows for zero round trips. The one case where
+fast-firebird is slower — bare connect — is because it encrypts the wire by
+default (SRP256 + `op_crypt`); pass `wireCrypt: 'disabled'` to match.
 
 ## Design highlights
 
 - **Round-trip frugality**: statement allocate+prepare pipelined into one round
   trip (lazy-send), execute+first-fetch and execute+record-counts coalesced
-  into single packets, deferred `op_free_statement`/`op_close_blob`, batched
-  fetch (400 rows/trip by default, configurable). `Attachment.roundTrips`
-  exposes the flush counter for your own budget assertions.
+  into single packets, deferred `op_free_statement`/`op_close_blob`, adaptive
+  fetch batching sized from the described row width. `Attachment.roundTrips`
+  exposes the flush counter for your own budget assertions — many of the
+  driver's own tests assert exact counts.
+- **Modern protocol**: offers protocols 13–16 and 19 (FB3 negotiates 15,
+  FB4 → 16, FB5 → 19), which is what unlocks FB5 inline blobs.
 - **Faithful SRP**: Firebird's non-standard SRP-6a variant (modPow proof mixing,
   `(a + u·x) mod N`, SHA-1 session key) implemented with `node:crypto` + BigInt.
 - **Real error messages**: complete gds→message table (2539 entries) generated
-  from the Firebird source, with SQLSTATE.
+  from the Firebird source, with SQLSTATE and the full status vector on every
+  `FirebirdError`.
 - **Charset layer resolved at prepare time**: zero per-cell branching; UTF8 and
   latin1 use native Buffer fast paths, everything else iconv-lite.
+- **Tested against real servers**: 752 core + 30 Drizzle tests across a
+  Firebird 3/4/5 (+ Legacy_Auth) Docker matrix, in CI on every push — the same
+  compose file as local development, so the environments cannot drift.
+
+## Monorepo layout
+
+```
+packages/core          @fast-firebird/core — the wire-protocol driver
+packages/drizzle       @fast-firebird/drizzle — Drizzle ORM adapter
+packages/benchmarks    driver-vs-driver benchmarks (latency-proxy harness)
+apps/demo              live demo dashboard (feature explorer + benchmarks)
+plans/                 living design docs (architecture, performance, charsets, …)
+plans/research/        protocol notes extracted from node-firebird(2), jaybird,
+                       rsfbclient and the Firebird core source
+diary/                 daily engineering log
+docker/                isolated FB 3/4/5 test matrix (compose project fast-firebird-test)
+scripts/               codegen + safe docker cleanup
+```
+
+## Development
+
+```sh
+pnpm install
+pnpm fb:up            # start isolated Firebird 3/4/5 containers (ports 30503-30505)
+pnpm test             # unit + integration
+pnpm fb:down          # remove ONLY this project's containers/volumes/network
+```
+
+Docker usage follows strict isolation rules (`plans/docker-safety.md`): every
+resource is named `fast-firebird-test-*`, cleanup is scoped to the compose
+project, and no global prune command is ever used. CI (GitHub Actions) runs
+the identical compose matrix.
+
+## Status & roadmap
+
+Core protocol work (M0–M5) and the ecosystem milestone (M6) are essentially
+complete; see `plans/000-roadmap.md` for the live roadmap, the design-decision
+log, and the deferred backlog (savepoints for Drizzle, gbak service actions,
+FB 2.5 legacy protocols, …).

@@ -254,6 +254,7 @@ stream close. Blobs stay eager by default (see Design decisions). Core: 752
 tests green on FB3/4/5 (+30 drizzle); GitHub Actions CI in place. Deferred
 backlog #7 (autoUpgradeReadOnly) and #8 (DX helpers: per-query fetchSize,
 queryOne, query<T>, await using, blob.toFile) shipped 2026-07-13. Remaining
-active M6 work: publish `@fast-firebird/core`, benchmark expansion, docs
-polish (README badly behind the feature set). Parked work lives in the
-Deferred backlog above. See `diary/2026-07-11.md` and `diary/2026-07-13.md`.
+active M6 work: publish `@fast-firebird/core`, benchmark expansion. README
+fully caught up 2026-07-15 (all shipped features documented + ecosystem
+positioning section, open-source-ready). Parked work lives in the Deferred
+backlog above. See `diary/2026-07-11.md` and `diary/2026-07-13.md`.
