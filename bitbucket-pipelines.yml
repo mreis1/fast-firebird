@@ -1,0 +1,92 @@
+# fast-firebird CI — Bitbucket Pipelines mirror of .github/workflows/ci.yml.
+# Kept for learning/reference: this repo is hosted on GitHub, where this file
+# is inert. The pipeline substance is identical (same compose file, same
+# build order, same tests); only the harness syntax differs.
+#
+# GitHub Actions → Bitbucket Pipelines translation notes:
+# - No `actions/checkout`: Bitbucket clones the repo into the step implicitly.
+# - No `pnpm/action-setup` / `setup-node`: the step RUNS INSIDE a container
+#   you pick (`image: node:22`), and pnpm comes from corepack, pinned by the
+#   root package.json "packageManager" field — same source of truth as GH.
+# - Docker is not on by default: `services: [docker]` starts a Docker daemon
+#   sidecar and injects the `docker` CLI into the step. Service containers
+#   share the step's network namespace, so ports published by compose
+#   (30503–30505, 30500) resolve on localhost exactly like on a GH runner.
+# - The injected CLI does NOT ship the compose v2 plugin — installed below.
+# - Memory: a step gets 4GB (8GB with `size: 2x`); the docker service takes
+#   its share from that, default 1GB. Three Firebird servers are light, but
+#   3GB gives headroom, which forces the 2x step.
+# - `after-script` runs even on failure — used for the server-logs dump
+#   (GH's `if: failure()` equivalent, gated on BITBUCKET_EXIT_CODE).
+
+image: node:22
+
+definitions:
+  services:
+    docker:
+      memory: 3072
+  caches:
+    pnpm: .pnpm-store
+
+pipelines:
+  # Mirrors the GH triggers: pushes to main + all pull requests.
+  branches:
+    main:
+      - step: &ci
+          name: Typecheck, build & test (Firebird 3/4/5 matrix)
+          size: 2x
+          max-time: 30
+          services: [docker]
+          caches: [pnpm]
+          script:
+            # references/ holds gitignored study clones, and apps/demo declares
+            # a file: dependency into one of them (node-firebird-2-ext). CI
+            # never runs the demo, but pnpm must still resolve the workspace
+            # graph — stub the manifest exactly as the lockfile recorded it.
+            - mkdir -p references/node-firebird2-ext
+            - |
+              cat > references/node-firebird2-ext/package.json <<'EOF'
+              {
+                "name": "node-firebird-2-ext",
+                "version": "1.0.0",
+                "main": "dist/index.js",
+                "dependencies": {
+                  "@fast-firebird/core": "file:../../packages/core",
+                  "generic-pool": "^3.9.0",
+                  "iconv-lite": "^0.7.0",
+                  "moment": "^2.30.1",
+                  "rxjs": "^7.8.2"
+                }
+              }
+              EOF
+
+            # pnpm via corepack, version pinned by package.json "packageManager".
+            - corepack enable
+            - pnpm config set store-dir .pnpm-store
+            - pnpm install --frozen-lockfile
+
+            # Order matters: drizzle's typecheck resolves @fast-firebird/core
+            # via its BUILT type declarations, so core builds first.
+            - pnpm --filter @fast-firebird/core typecheck
+            - pnpm --filter @fast-firebird/core build
+            - pnpm --filter @fast-firebird/drizzle typecheck
+            - pnpm --filter @fast-firebird/drizzle build
+
+            # The injected docker CLI has no compose v2 plugin — add it.
+            - mkdir -p ~/.docker/cli-plugins
+            - curl -fsSL https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-x86_64 -o ~/.docker/cli-plugins/docker-compose
+            - chmod +x ~/.docker/cli-plugins/docker-compose
+
+            # Same compose file + project name as local dev
+            # (plans/docker-safety.md). --wait blocks on the per-server TCP
+            # healthchecks; first boot provisions test.fdb via FIREBIRD_DATABASE.
+            - docker compose -p fast-firebird-test -f docker/docker-compose.yml up -d --wait
+
+            - pnpm --filter @fast-firebird/core test
+            - pnpm --filter @fast-firebird/drizzle test
+          after-script:
+            # Runs on success AND failure — only dump server logs on failure.
+            - if [ "$BITBUCKET_EXIT_CODE" != "0" ]; then docker compose -p fast-firebird-test -f docker/docker-compose.yml logs --tail 150; fi
+  pull-requests:
+    '**':
+      - step: *ci
