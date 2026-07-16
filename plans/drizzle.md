@@ -65,3 +65,41 @@ but emits pg value mappings and reads oddly ("pg" tables for Firebird).
 ## Status
 Package scaffolded (`@fast-firebird/drizzle`). Architecture research in
 `plans/research/drizzle-internals.md`. Implementing the dialect next.
+(Later: dialect, session, migrator, introspection all shipped — see roadmap.)
+
+## Relational `with:` — fix paths (researched 2026-07-16)
+
+Current state: flat findMany/findFirst work; `with:` throws a guidance error
+(Firebird lacks the JSON aggregation Drizzle's RQB compiles to).
+
+Options assessed:
+- **A. String-built JSON via LIST()** — rejected: JSON escaping via REPLACE
+  chains is fragile, LIST() element order undefined, blob/date/number
+  formatting matrix too error-prone for a driver.
+- **B. Client-side query decomposition (Prisma-style)** — RECOMMENDED when
+  demand shows up: intercept the relational query config, run root query +
+  one `WHERE fk IN (…)` query per relation, stitch nested objects in JS.
+  Per-parent relation limits via `ROW_NUMBER() OVER (PARTITION BY fk)`
+  (FB3+). Works on all supported servers, stock. Multi-day effort + test
+  matrix. Post-publish, demand-driven.
+- **C. JSON UDR plugin** — rejected as primary path: UDRs cannot define
+  AGGREGATE functions (only scalar/proc/trigger), so json_agg needs the
+  LIST() hybrid anyway; requires native code installed on the customer's
+  server (breaks the pure-TS/stock-server positioning; admin access often
+  unavailable); Drizzle RQB SQL also leans on LATERAL (FB4+ only).
+
+**Upstream status (checked 2026-07-16 — do NOT file a json_agg issue, it
+would be a duplicate):**
+- FirebirdSQL/firebird#5431 (2016, 32+ votes) is the JSON umbrella issue.
+- Full SQL-standard JSON support (ISO/IEC TR 19075-6) **already exists in
+  the Red Database fork** and is being ported to Firebird 6.0 by @Noremos
+  in staged PRs; core dev sim1984 confirmed (May 2026). Plan tree explicitly
+  includes **"JSON AggNodes"** (= JSON_ARRAYAGG etc.) plus JSON type,
+  JSON_TABLE, path engine.
+- First PR of the split: #9062 "JSON Path parser" (June 2026, open);
+  earlier infra PR #7221 (2022). FB6 timing uncertain (stabilization after
+  shared-metadata-cache merge is the current priority).
+- Implication for us: no upstream contribution needed (it's written, just
+  being reviewed); watch #5431/#9062. When FB6 ships JSON functions, add a
+  capability-gated single-query RQB mode (like inline blobs gate on
+  protocol 19) — until then Option B serves the FB3/4/5 installed base.

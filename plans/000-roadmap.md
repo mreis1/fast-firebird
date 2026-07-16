@@ -142,6 +142,11 @@ only when API surface stabilizes (avoid premature package fragmentation).
       (user-defined columns + blob file picker, insert+fetch timings).
 - [ ] Publish `@fast-firebird/core` (npm or private registry) — blocks real
       deployment of the nf2-ext branch (today a `file:` link)
+- [ ] (post-publish, demand-driven) Drizzle relational `with:` via client-side
+      query decomposition — Option B in `plans/drizzle.md` ("Relational with:
+      — fix paths"). Upstream FB6 JSON work tracked there too (#5431/#9062;
+      JSON AggNodes already written in the Red Database fork, being ported) —
+      when FB6 ships, add a capability-gated single-query mode instead.
 - [x] CI: GitHub Actions (`.github/workflows/ci.yml`, 2026-07-13) — same
       docker-compose matrix as local dev (FB3/4/5 + legacy), frozen-lockfile
       install with a stub for the gitignored nf2-ext file: dep, typecheck +
