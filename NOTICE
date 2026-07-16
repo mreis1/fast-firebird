@@ -1,0 +1,26 @@
+fast-firebird
+https://github.com/mreis1/fast-firebird
+
+This project contains material derived from the Firebird database project
+(https://firebird.org), used under the Initial Developer's Public License
+Version 1.0 (IDPL) and the InterBase Public License Version 1.0 (IPL):
+
+- packages/core/src/protocol/messages.json
+  Error-message templates (gds code -> message text, 2539 entries) generated
+  from the Firebird source tree by scripts/generate-messages.mjs.
+  Copyright (c) Firebird Project and contributors.
+
+- packages/core/src/types/timezones.ts
+  Time-zone id table derived from Firebird's src/common/TimeZones.h
+  (zone identifiers from the IANA tz database, ordering fixed by the
+  Firebird project). Copyright (c) Firebird Project and contributors.
+
+The IDPL and IPL are available at:
+https://www.firebirdsql.org/en/initial-developer-s-public-license-version-1-0/
+https://www.firebirdsql.org/en/interbase-public-license-version-1-0/
+
+The Firebird wire protocol implementation in this project is an independent,
+clean-room-style reimplementation in TypeScript informed by the publicly
+available Firebird sources and documentation; no Firebird C++ source code is
+included in this package's runtime beyond the generated data files listed
+above.

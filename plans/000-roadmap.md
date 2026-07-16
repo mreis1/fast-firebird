@@ -271,7 +271,11 @@ stream close. Blobs stay eager by default (see Design decisions). Core: 784
 tests green on FB3/4/5 (+66 drizzle); GitHub Actions CI in place. Deferred
 backlog CLOSED except by decision: #1–11 shipped (blob suite, TZ types,
 autoUpgradeReadOnly, DX helpers, Drizzle depth, gbak services, DECFLOAT
-specials); #12 FB2.5 + #13 native/WASM flagged WONT DO. Remaining active M6
-work: publish `@fast-firebird/core`, benchmark expansion. README fully caught
-up 2026-07-15 (all shipped features + ecosystem positioning,
-open-source-ready). See `diary/2026-07-13.md` and `diary/2026-07-15.md`.
+specials); #12 FB2.5 + #13 native/WASM flagged WONT DO. Benchmark expansion
+DONE 2026-07-16 (many-small-blobs pairwise scenario + blob strategy matrix:
+inline/pipelined/readAhead; README + plans/performance.md refreshed with
+re-measured numbers — blob 11–149×). Remaining active M6 work: publish
+`@fast-firebird/core` (LICENSE file, FUNDING, CONTRIBUTING/CoC/SECURITY,
+NOTICE for IDPL-derived generated files, package.json metadata, npm scope +
+provenance publish). README fully caught up 2026-07-15 (all shipped features
++ ecosystem positioning). See `diary/2026-07-15.md` and `diary/2026-07-16.md`.

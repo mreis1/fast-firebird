@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest an API, option, or capability
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >
+        What are you trying to do that the driver currently makes hard or
+        impossible? Concrete use cases beat abstract feature descriptions.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: API sketch welcome — how would you want to call it?
+      render: typescript
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: >
+        Workarounds you're using today, other drivers' approaches, or why
+        existing options (blobs modes, executeScript, pool, services API, …)
+        don't cover it.
+  - type: input
+    id: versions
+    attributes:
+      label: Firebird versions this applies to
+      placeholder: "FB5 only / FB3+"

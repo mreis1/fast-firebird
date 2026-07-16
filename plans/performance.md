@@ -71,6 +71,57 @@ Blob dominance: node-firebird writes/reads 1024-byte segments (~1000 RTs/MB);
 we use 64KB segments (131 RTs for 3×(write+read) of 1MB) — raised to the wire
 maximum by default 2026-07-09.
 
+## Results 2026-07-16 (benchmark expansion for open-source release)
+
+Same harness, node-firebird 1.1.10, FB5 container, Node 22.16. New scenario:
+`scan 300×8KB blobs` (the "table of memos/documents" shape — per-blob round
+trips dominate). 6 SRP connect retries needed by node-firebird during the run.
+
+| Scenario | Delay | fast-firebird | node-firebird | Speedup |
+|---|---|---|---|---|
+| connect+detach ×10 | 0ms | 192 ms | 194 ms | 1.0× |
+| warm 1-row select ×200 | 0ms | 290 ms (600 RT) | 347 ms | 1.2× |
+| warm select ×200 (open tx) | 0ms | 110 ms (202 RT) | 287 ms | 2.6× |
+| scan 10k rows ×3 | 0ms | 126 ms (91 RT) | 134 ms | 1.1× |
+| insert 300 rows (1 tx) | 0ms | 165 ms (307 RT) | 260 ms | 1.6× |
+| blob 1MB write+read ×3 | 0ms | 229 ms (80 RT) | 2534 ms | **11.1×** |
+| scan 300×8KB blobs | 0ms | 34 ms (21 RT) | 916 ms | **26.7×** |
+| warm select ×200 (open tx) | 2ms | 1342 ms | 3846 ms | 2.9× |
+| insert 300 rows (1 tx) | 2ms | 2073 ms | 4134 ms | 2.0× |
+| blob 1MB write+read ×3 | 2ms | 360 ms (80 RT) | 39156 ms | **108.8×** |
+| scan 300×8KB blobs | 2ms | 174 ms (21 RT) | 21414 ms | **123.4×** |
+| warm select ×200 (open tx) | 10ms | 4993 ms | 14905 ms | 3.0× |
+| scan 10k rows ×3 | 10ms | 2613 ms (91 RT) | 4103 ms | 1.6× |
+| insert 300 rows (1 tx) | 10ms | 7498 ms | 15128 ms | 2.0× |
+| blob 1MB write+read ×3 | 10ms | 1010 ms (80 RT) | 150037 ms | **148.5×** |
+| scan 300×8KB blobs | 10ms | 610 ms (21 RT) | 80882 ms | **132.6×** |
+
+vs the 2026-07-09 run: 1MB blob ×3 dropped 131→80 RT and 950→360 ms @2ms —
+the 32-deep segment pipelining shipped 07-10/11. That's why the blob speedup
+grew from 14–44× to 11–149× (both drivers re-measured same day, same box).
+
+### Blob strategy matrix (fast-firebird only, 300×8KB, FB5)
+
+Isolates WHERE the speedup comes from. `BENCH_BLOB=1` runs just this matrix.
+
+| Strategy | 0ms | 2ms | 10ms |
+|---|---|---|---|
+| eager + FB5 inline (default) | 42 ms (21 RT) | 149 ms (21 RT) | 566 ms (21 RT) |
+| eager, inline off (pipelined) | 68 ms (217 RT) | 413 ms (217 RT) | 1778 ms (217 RT) |
+| stream lazy, on-demand | 362 ms (607 RT) | 4062 ms (607 RT) | 15390 ms (607 RT) |
+| stream lazy + blobReadAhead | 327 ms (607 RT) | 3847 ms (607 RT) | 15038 ms (607 RT) |
+| stream on-demand + 10ms/row work | 4372 ms | 7546 ms | 18414 ms |
+| stream readAhead + 10ms/row work | 3339 ms | 3944 ms | 14690 ms |
+
+Findings, verified not assumed:
+- FB5 inline blobs: **zero** blob RTs (21 = prepare/execute/fetch batches).
+- Eager pipelining: ~0.7 RT/blob (217 for 300) vs 2 sequential RT/blob lazy.
+- `blobReadAhead` does NOT cut RTs (607 both ways — the prefetcher is
+  single-flight by design, bounded lock slices). Its value is OVERLAP: with
+  10ms/row consumer work it hides the fetches behind the work — 3944 ms @2ms
+  ≈ the 3847 ms pure-fetch floor, vs 7546 ms on-demand (1.9×). With zero
+  consumer work between rows, readAhead ≈ on-demand — expected, now measured.
+
 ## Benchmark harness (packages/benchmarks)
 
 - Compare: fast-firebird vs node-firebird vs node-firebird2.
@@ -83,4 +134,8 @@ maximum by default 2026-07-09.
   count is a first-class benchmark metric.
 
 ## Status
-Not started; harness lands with M3.
+Harness shipped with M3 (latency proxy, RT counter, markdown report).
+Expanded 2026-07-16 for the open-source release: many-small-blobs scan
+(pairwise) + fast-firebird blob strategy matrix (inline / pipelined eager /
+lazy stream ± readAhead ± consumer work). Results above are in the README's
+performance section.

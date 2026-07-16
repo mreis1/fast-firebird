@@ -10,6 +10,8 @@ export interface BenchConn {
   insertMany(sql: string, rows: unknown[][]): Promise<void>;
   /** Write then read back one blob value; returns byte length read. */
   blobRoundTrip(table: string, id: number, data: Buffer): Promise<number>;
+  /** Select every row of `table` and fully read each blob; returns total bytes. */
+  blobScan(table: string): Promise<number>;
   close(): Promise<void>;
   /** Round trips consumed so far, when the driver can report it. */
   roundTrips?(): number;
@@ -53,6 +55,15 @@ class FastConn implements BenchConn {
     return (row!.DATA as Buffer).length;
   }
 
+  async blobScan(table: string): Promise<number> {
+    // Eager mode (the default): blobs are materialized during the fetch —
+    // inline on FB5 protocol 19, pipelined open/get/close otherwise.
+    const rows = await this.db.query(`select id, data from ${table} order by id`);
+    let total = 0;
+    for (const row of rows) total += (row.DATA as Buffer).length;
+    return total;
+  }
+
   async close(): Promise<void> {
     await this.db.disconnect();
   }
@@ -79,6 +90,20 @@ interface NfDb {
 interface NfTx {
   query(sql: string, params: unknown[], cb: (err: Error | null, rows?: unknown[]) => void): void;
   commit(cb: (err: Error | null) => void): void;
+}
+
+type NfBlobCb = (cb: (err: Error | null, name: string, e: NodeJS.EventEmitter) => void) => void;
+
+function readNfBlob(blob: NfBlobCb): Promise<number> {
+  return new Promise((resolve, reject) => {
+    blob((err, _name, emitter) => {
+      if (err) return reject(err);
+      let total = 0;
+      emitter.on('data', (chunk: Buffer) => (total += chunk.length));
+      emitter.on('end', () => resolve(total));
+      emitter.on('error', reject);
+    });
+  });
 }
 
 class NodeFirebirdConn implements BenchConn {
@@ -118,18 +143,17 @@ class NodeFirebirdConn implements BenchConn {
 
   async blobRoundTrip(table: string, id: number, data: Buffer): Promise<number> {
     await this.query(`update or insert into ${table} (id, data) values (?, ?) matching (id)`, [id, data]);
-    const rows = (await this.query(`select data from ${table} where id = ?`, [id])) as Array<{
-      DATA(cb: (err: Error | null, name: string, e: NodeJS.EventEmitter) => void): void;
-    }>;
-    return new Promise((resolve, reject) => {
-      rows[0]!.DATA((err, _name, emitter) => {
-        if (err) return reject(err);
-        let total = 0;
-        emitter.on('data', (chunk: Buffer) => (total += chunk.length));
-        emitter.on('end', () => resolve(total));
-        emitter.on('error', reject);
-      });
-    });
+    const rows = (await this.query(`select data from ${table} where id = ?`, [id])) as Array<{ DATA: NfBlobCb }>;
+    return readNfBlob(rows[0]!.DATA);
+  }
+
+  async blobScan(table: string): Promise<number> {
+    // node-firebird returns blob columns as callbacks; each read opens the
+    // blob, pulls segments and closes it — sequential round trips per row.
+    const rows = (await this.query(`select id, data from ${table} order by id`)) as Array<{ DATA: NfBlobCb }>;
+    let total = 0;
+    for (const row of rows) total += await readNfBlob(row.DATA);
+    return total;
   }
 
   close(): Promise<void> {

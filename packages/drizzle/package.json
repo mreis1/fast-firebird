@@ -3,6 +3,18 @@
   "version": "0.1.0",
   "description": "Drizzle ORM dialect and driver for Firebird, powered by @fast-firebird/core",
   "license": "MIT",
+  "author": "mreis1 (https://github.com/mreis1)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mreis1/fast-firebird.git",
+    "directory": "packages/drizzle"
+  },
+  "homepage": "https://github.com/mreis1/fast-firebird#readme",
+  "bugs": "https://github.com/mreis1/fast-firebird/issues",
+  "funding": "https://github.com/sponsors/mreis1",
+  "engines": {
+    "node": ">=20"
+  },
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -30,5 +42,5 @@
     "drizzle-orm": "^0.45.0",
     "tsup": "^8.4.0"
   },
-  "keywords": ["firebird", "drizzle", "drizzle-orm", "orm", "sql"]
+  "keywords": ["firebird", "firebirdsql", "drizzle", "drizzle-orm", "orm", "sql", "typescript", "migrations", "introspection"]
 }

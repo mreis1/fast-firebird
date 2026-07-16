@@ -8,6 +8,12 @@
   first-class support for <b>Firebird 3, 4, and 5</b>.
 </p>
 
+<p align="center">
+  <a href="https://github.com/mreis1/fast-firebird/actions/workflows/ci.yml"><img src="https://github.com/mreis1/fast-firebird/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg" alt="Node >= 20">
+</p>
+
 ```ts
 import { connect } from '@fast-firebird/core';
 
@@ -559,20 +565,44 @@ fbclient). SRP256/SRP remain the default for modern servers.
 
 Measured against `node-firebird` 1.1.10 on Firebird 5 with an in-process
 latency proxy (`pnpm --filter @fast-firebird/benchmarks bench`), defaults vs
-defaults:
+defaults. Columns are one-way link delay (RTT ≈ 2×):
 
-| Scenario | 0ms | 10ms RTT link |
-|---|---|---|
-| warm select ×200 (open tx) | 3.0× | 2.9× |
-| 10k-row scan | 1.0× | 1.8× |
-| 300-row insert (1 tx) | 2.6× | 2.0× |
-| **1MB blob write+read** | **14×** | **44×** |
+| Scenario | 0ms | 2ms | 10ms |
+|---|---|---|---|
+| warm select ×200 (open tx) | 2.6× | 2.9× | 3.0× |
+| 10k-row scan | 1.1× | 1.3× | 1.6× |
+| 300-row insert (1 tx) | 1.6× | 2.0× | 2.0× |
+| **1MB blob write+read** | **11×** | **109×** | **149×** |
+| **scan 300 rows × 8KB blobs** | **27×** | **123×** | **133×** |
 
 Blobs dominate because legacy drivers use 1KB segments (~1000 round trips per
-MB); fast-firebird uses 64KB segments with deep pipelining — and on FB 5.0.2+
-small blobs ride inline with the rows for zero round trips. The one case where
-fast-firebird is slower — bare connect — is because it encrypts the wire by
-default (SRP256 + `op_crypt`); pass `wireCrypt: 'disabled'` to match.
+MB) and open/read/close each blob sequentially; fast-firebird uses 64KB
+segments with deep pipelining — and on FB 5.0.2+ small blobs ride inline with
+the rows for zero extra round trips. The one case where fast-firebird can be
+slower — bare connect — is because it encrypts the wire by default (SRP256 +
+`op_crypt`); pass `wireCrypt: 'disabled'` to match.
+
+### Where the blob speedup comes from
+
+The same 300×8KB scan run under each of fast-firebird's blob strategies
+(round trips include prepare/execute/fetch; the scan itself is ~21):
+
+| Strategy | 0ms | 2ms | 10ms |
+|---|---|---|---|
+| eager + FB5 inline blobs (default) | 42 ms (21 RT) | 149 ms (21 RT) | 566 ms (21 RT) |
+| eager, inline off (pipelined open/read/close) | 68 ms (217 RT) | 413 ms (217 RT) | 1778 ms (217 RT) |
+| `queryStream` lazy, on-demand | 362 ms (607 RT) | 4062 ms (607 RT) | 15390 ms (607 RT) |
+| `queryStream` lazy + `blobReadAhead`, 10ms/row consumer work | 3339 ms | 3944 ms | 14690 ms |
+| `queryStream` lazy on-demand, 10ms/row consumer work | 4372 ms | 7546 ms | 18414 ms |
+
+Reading the table: FB5 inline blobs eliminate blob round trips entirely (21
+vs 217); eager pipelining amortizes open/read/close across the batch (~0.7 RT
+per blob vs 2 sequential ones on the lazy path). `blobReadAhead` doesn't cut
+round trips — it overlaps them with your per-row processing: with 10ms of
+consumer work per row (a disk write, an image resize), read-ahead hides the
+blob fetches almost completely at 2ms link delay (3.9s ≈ the 3.8s pure-fetch
+floor, vs 7.5s on-demand). Use eager (the default) when rows fit in memory;
+stream + read-ahead when they don't.
 
 ## Design highlights
 

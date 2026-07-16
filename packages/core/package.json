@@ -3,6 +3,18 @@
   "version": "0.1.0",
   "description": "Pure-TypeScript Firebird wire-protocol driver for Node.js (Firebird 3/4/5)",
   "license": "MIT",
+  "author": "mreis1 (https://github.com/mreis1)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mreis1/fast-firebird.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/mreis1/fast-firebird#readme",
+  "bugs": "https://github.com/mreis1/fast-firebird/issues",
+  "funding": "https://github.com/sponsors/mreis1",
+  "engines": {
+    "node": ">=20"
+  },
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -14,7 +26,7 @@
       "require": "./dist/index.cjs"
     }
   },
-  "files": ["dist"],
+  "files": ["dist", "NOTICE"],
   "scripts": {
     "build": "tsup src/index.ts --format esm,cjs --dts --sourcemap --clean",
     "typecheck": "tsc --noEmit",
@@ -28,5 +40,18 @@
   "devDependencies": {
     "tsup": "^8.4.0"
   },
-  "keywords": ["firebird", "sql", "database", "driver", "typescript"]
+  "keywords": [
+    "firebird",
+    "firebirdsql",
+    "fb",
+    "sql",
+    "database",
+    "driver",
+    "client",
+    "wire-protocol",
+    "typescript",
+    "connection-pool",
+    "blob",
+    "srp"
+  ]
 }

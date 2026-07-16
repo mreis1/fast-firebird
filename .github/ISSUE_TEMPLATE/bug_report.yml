@@ -1,0 +1,67 @@
+name: Bug report
+description: Something behaves incorrectly in @fast-firebird/core or @fast-firebird/drizzle
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Firebird behavior genuinely differs across server
+        versions and charset configurations, so the environment details below
+        are not boilerplate — they usually decide the diagnosis.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: >
+        Ideally a snippet runnable against a stock Firebird Docker image
+        (e.g. firebirdsql/firebird:5). Include table DDL if relevant.
+      render: typescript
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Full error (if any)
+      description: >
+        Paste the complete FirebirdError — it carries the gds code, SQLSTATE
+        and status vector, which usually pinpoint the server-side cause.
+      render: text
+  - type: input
+    id: driver-version
+    attributes:
+      label: Driver version
+      placeholder: "@fast-firebird/core 0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: server
+    attributes:
+      label: Firebird server version + platform
+      placeholder: "Firebird 5.0.2 (Docker firebirdsql/firebird:5), Linux x64"
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      placeholder: "22.16.0"
+    validations:
+      required: true
+  - type: input
+    id: charset
+    attributes:
+      label: Connection charset configuration
+      description: charset / charsetNoneEncoding / charsetOverrides, if any
+      placeholder: "default (UTF8)"
+  - type: textarea
+    id: options
+    attributes:
+      label: Relevant connect/query options
+      description: blobs mode, wireCrypt, pool config, timeZones, etc.
