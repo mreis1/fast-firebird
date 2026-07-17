@@ -1,8 +1,8 @@
 # node-firebird2-ext → fast-firebird backend swap
 
 **Goal:** back the existing `node-firebird-2-ext` public API with `@fast-firebird/core`
-instead of `node-firebird2`, so downstream internal projects migrate with minimum code change.
-Branch `fast-firebird` in `a private repository` (cloned
+instead of `node-firebird2`, so downstream internal projects migrate with minimum
+code change. Branch `fast-firebird` in the private `node-firebird2-ext` repo (cloned
 under `references/node-firebird2-ext`). **Full swap** — remove the `node-firebird2`
 dependency; keep the public surface identical. Additions beyond the current API are
 documented in the repo's `MIGRATION.md` for post-integration review.

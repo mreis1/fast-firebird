@@ -132,7 +132,7 @@ only when API surface stabilizes (avoid premature package fragmentation).
       (CRUD, where, pagination, RETURNING, tx commit/rollback, all column types)
       green on FB3/4/5. Surfaced+fixed a core param-coercion/wire-desync bug (below).
 - [x] node-firebird2 compat + migration guide — delivered as the `fast-firebird`
-      branch of `the private node-firebird2-ext repo` (full internals swap, public API
+      branch of the private `node-firebird2-ext` repo (full internals swap, public API
       unchanged, RO→RW auto-upgrade replicated, MIGRATION.md; 9/9 on FB3/4/5).
       See `plans/nf2-ext-integration.md`. Prereq for deployment: publish core.
 - [x] Live demo dashboard (`apps/demo`, React + Fastify): connection/wire info,
@@ -141,7 +141,12 @@ only when API surface stabilizes (avoid premature package fragmentation).
       blob round-trip, per-stack micro-benchmark, custom structure benchmark
       (user-defined columns + blob file picker, insert+fetch timings).
 - [ ] Publish `@fast-firebird/core` (npm or private registry) — blocks real
-      deployment of the nf2-ext branch (today a `file:` link)
+      deployment of the nf2-ext branch (today a `file:` link).
+      2026-07-17: npm org `fast-firebird` registered; per-package READMEs,
+      `publishConfig`, release-triggered publish workflow with provenance
+      (`.github/workflows/publish.yml`) in place; tarballs verified via
+      `npm pack --dry-run`. Remaining (user): make repo public (provenance
+      requires it), add `NPM_TOKEN` secret, create GitHub Release `v0.1.0`.
 - [ ] (post-publish, demand-driven) Drizzle relational `with:` via client-side
       query decomposition — Option B in `plans/drizzle.md` ("Relational with:
       — fix paths"). Upstream FB6 JSON work tracked there too (#5431/#9062;

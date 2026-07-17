@@ -1,0 +1,70 @@
+# Publishes @fast-firebird/core and @fast-firebird/drizzle to npm with
+# provenance attestation (links each tarball to this repo + workflow run).
+#
+# Trigger: publishing a GitHub Release (tag v*). The tagged commit must be on
+# main and green in CI — this workflow re-runs build + unit tests as a final
+# gate, but the full Firebird-matrix integration suite is CI's job.
+#
+# Auth: needs an npm Granular Access Token with read/write on the
+# fast-firebird org packages, stored as the NPM_TOKEN repo secret.
+# Provenance additionally needs the id-token permission below (OIDC).
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write # npm provenance (OIDC attestation)
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same stub as ci.yml: pnpm must resolve the workspace graph even
+      # though the gitignored references/ clone is absent.
+      - name: Stub gitignored file dependency (node-firebird-2-ext)
+        run: |
+          mkdir -p references/node-firebird2-ext
+          cat > references/node-firebird2-ext/package.json <<'EOF'
+          {
+            "name": "node-firebird-2-ext",
+            "version": "1.0.0",
+            "main": "dist/index.js",
+            "dependencies": {
+              "@fast-firebird/core": "file:../../packages/core",
+              "generic-pool": "^3.9.0",
+              "iconv-lite": "^0.7.0",
+              "moment": "^2.30.1",
+              "rxjs": "^7.8.2"
+            }
+          }
+          EOF
+
+      - uses: pnpm/action-setup@v4 # version comes from package.json "packageManager"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm -r build
+
+      - name: Unit tests
+        run: pnpm --filter @fast-firebird/core test:unit
+
+      # -r skips private packages (root, benchmarks, demo); pnpm rewrites
+      # workspace:* to the real version in the published manifests.
+      - name: Publish to npm
+        run: pnpm -r publish --access public --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'
