@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/logo.svg" alt="fast-firebird" width="620">
+  <img src="./assets/logo2-lettering.svg" alt="fast-firebird — The modern, pure-TypeScript Firebird driver for Node.js" width="760">
 </p>
 
 <p align="center">
@@ -38,13 +38,20 @@ await db.disconnect();      // or: await using db = await connect({ … })
 ## Why another Firebird driver?
 
 The existing Node.js options each stop short in a different place, and both are
-projects we learned a lot from. `node-firebird` is pure JavaScript but grew up
-in the callback era, and its coverage of newer server features and types is
+projects we learned a lot from. `node-firebird` deserves particular respect
+here: it carried this maintainer's production systems for years, and much of
+the Node + Firebird community with it. But it grew up in the callback era, and
+the technical debt that accumulates over a decade — together with its
+deliberate retro-compatibility with very old Node.js versions — limits what it
+can adopt: coverage of newer server features, protocols and types remains
 partial. `node-firebird-driver-native` is well-engineered but binds to the
 native `fbclient` library, which complicates containers, serverless platforms,
 and simple onboarding.
 
-fast-firebird aims to be the option that doesn't stop short: a pure-TypeScript,
+fast-firebird makes the opposite, deliberately disruptive choice: no
+backwards-compatibility baggage, a modern Node.js baseline (≥ 20), and modern
+engineering practices throughout. It aims to be the option that doesn't stop
+short: a pure-TypeScript,
 promise-native driver that speaks the modern wire protocol (up to protocol 19)
 with Srp256 authentication and Arc4/ChaCha wire encryption, covers the full
 FB4/5 type system (DECFLOAT, INT128, `TIMESTAMP/TIME WITH TIME ZONE` with the

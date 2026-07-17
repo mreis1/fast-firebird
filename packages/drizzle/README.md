@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/mreis1/fast-firebird/main/assets/png/logo2-lettering-1440.png" alt="fast-firebird — The modern, pure-TypeScript Firebird driver for Node.js" width="640">
+</p>
+
 # @fast-firebird/drizzle
 
 [Drizzle ORM](https://orm.drizzle.team) dialect and driver for **Firebird 3/4/5**,
