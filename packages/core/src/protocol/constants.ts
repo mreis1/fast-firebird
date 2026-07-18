@@ -171,6 +171,9 @@ export const enum Dpb {
   auth_plugin_list = 85,
   auth_plugin_name = 86,
   session_time_zone = 91,
+  // FB6+ (pre-FB6 servers ignore unknown DPB tags — still only sent when set)
+  owner = 102,
+  search_path = 105,
 }
 
 // ── TPB (transaction parameter buffer) ─────────────────────────────────────

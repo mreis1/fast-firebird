@@ -261,10 +261,14 @@ only when API surface stabilizes (avoid premature package fragmentation).
 13. ~~Native/WASM acceleration~~ (SIMD UTF-8, decimal128) — **WONT DO**
    (decided 2026-07-15): out of scope unless benchmarks prove a hard need
    (`plans/architecture.md`).
-14. FB6 attach options: `searchPath` (isc_dpb_search_path 105) and `owner`
-   (isc_dpb_owner 102, createDatabase) — small DPB additions, added
-   2026-07-18 after FB6/P20 shipped. Do before or shortly after v0.1.0;
-   schema-aware Drizzle introspection (RDB$SCHEMAS) waits for FB6 RC.
+~~14. FB6 attach options~~ — SHIPPED 2026-07-18 same day: `searchPath`
+   (isc_dpb_search_path 105, string|string[], attach+create) and `owner`
+   (isc_dpb_owner 102, createDatabase only). Pre-FB6 servers IGNORE the
+   unknown tags (verified empirically on FB3/FB5 — early docs assumed
+   rejection), so both are safe in version-shared configs. 7 integration
+   tests (fb6 lane: search-path resolution incl. SYSTEM auto-append +
+   current_schema, string/array forms, mon$owner; FB3/4/5: graceful-ignore).
+   Schema-aware Drizzle introspection (RDB$SCHEMAS) still waits for FB6 RC.
 15. Drizzle single-query relational mode gated on FB6 JSON — trigger is the
    fb6-json-canary test going red (see plans/drizzle.md). Until then,
    Option B (client-side decomposition) is the demand-driven path.

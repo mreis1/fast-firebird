@@ -83,6 +83,19 @@ export interface FirebirdConnectionOptions {
   password?: string;
 
   role?: string | null;
+  /**
+   * FB6+: initial schema search path for the session (unqualified-name
+   * resolution). Array or comma-separated string; FB6's default is
+   * `PUBLIC, SYSTEM` (SYSTEM is appended automatically if omitted).
+   * Pre-FB6 servers silently ignore it.
+   */
+  searchPath?: string | string[] | null;
+  /**
+   * FB6+: owner of a newly created database (`createDatabase` only; the
+   * attaching user must have the privilege to create databases for others,
+   * e.g. SYSDBA). Ignored on plain `connect`.
+   */
+  owner?: string | null;
   /** Connection charset (lc_ctype). Default UTF8. */
   charset?: string;
   /** Compatibility alias for charset. */
@@ -181,6 +194,8 @@ export interface ResolvedOptions {
   user: string;
   password: string;
   role: string | null;
+  searchPath: string | null;
+  owner: string | null;
   charset: string;
   lowercaseKeys: boolean;
   pageSize: number;
@@ -222,6 +237,8 @@ export function resolveOptions(raw: FirebirdConnectionOptions & LegacyOptionAlia
     user: raw.user ?? 'SYSDBA',
     password: raw.password ?? 'masterkey',
     role: raw.role ?? null,
+    searchPath: Array.isArray(raw.searchPath) ? raw.searchPath.join(', ') : (raw.searchPath ?? null),
+    owner: raw.owner ?? null,
     charset: (raw.charset ?? raw.encoding ?? 'UTF8').toUpperCase(),
     lowercaseKeys: raw.lowercaseKeys ?? raw.lowercase_keys ?? false,
     pageSize: raw.pageSize ?? 8192,

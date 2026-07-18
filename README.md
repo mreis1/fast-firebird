@@ -71,7 +71,7 @@ transaction scoping, the statement-cache metadata-pinning caveat), and the
 
 ## Feature overview
 
-- **Connectivity** — SRP256/Srp/Legacy_Auth, Arc4/ChaCha/ChaCha64 wire crypt, zlib wire compression, connect timeouts covering the whole handshake
+- **Connectivity** — SRP256/Srp/Legacy_Auth, Arc4/ChaCha/ChaCha64 wire crypt, zlib wire compression, connect timeouts covering the whole handshake, FB6 `searchPath`/`owner` attach options
 - **Queries** — promise API (`query`, `queryOne`, `run`, `execute`), typed rows `query<T>()`, prepared statements, per-connection LRU statement cache, adaptive batched fetching with per-query `fetchSize`
 - **Result shaping** — `ColumnInfo` metadata, `rowMode: 'array'`, `exclude`/`only` column filters, `expandStar` (`select *` rewritten to explicit columns before prepare)
 - **Streaming** — `queryStream` async iterator with batch-level backpressure
@@ -548,6 +548,25 @@ const db = await connect({
 
 const rows = await db.query("select memo from history where memo like ?", ['%€%']);
 ```
+
+## Firebird 6 (protocol 20, schemas)
+
+Against an FB6 server the driver negotiates protocol 20 automatically (inline
+blobs included), and the new attach-time options are exposed:
+
+```ts
+// Schema search path — how unqualified names resolve (FB6 default: PUBLIC, SYSTEM)
+const db = await connect({ host, database, searchPath: ['APP', 'PUBLIC'] });
+await db.query('select * from settings');   // finds APP.SETTINGS
+
+// Create a database owned by another user
+await createDatabase({ host, database, owner: 'APP_OWNER' });
+```
+
+Both options are silently ignored by pre-FB6 servers, so they're safe to set
+in configs shared across versions. FB6 support is tracked against the
+`firebirdsql/firebird:6-snapshot` image in CI (the same suite as FB3/4/5); a
+canary test watches for the arrival of upstream JSON support.
 
 ## Authentication, encryption & compression
 

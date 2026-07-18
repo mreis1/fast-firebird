@@ -11,6 +11,8 @@ function buildDpb(opts: ResolvedOptions, dpbAuthData: string | null, forCreate: 
   pb.string(Dpb.user_name, opts.user);
   if (dpbAuthData) pb.string(Dpb.specific_auth_data, dpbAuthData, (s) => Buffer.from(s, 'latin1'));
   if (opts.role) pb.string(Dpb.sql_role_name, opts.role);
+  // FB6+ item — pre-FB6 servers ignore the unknown tag (verified on FB3/FB5).
+  if (opts.searchPath) pb.string(Dpb.search_path, opts.searchPath);
   pb.int32(Dpb.process_id, process.pid);
   pb.string(Dpb.process_name, (process.title || 'node').slice(-250));
   if (forCreate) {
@@ -19,6 +21,7 @@ function buildDpb(opts: ResolvedOptions, dpbAuthData: string | null, forCreate: 
     pb.byte(Dpb.force_write, 1);
     pb.byte(Dpb.overwrite, 0);
     pb.string(Dpb.set_db_charset, opts.charset === 'NONE' ? 'NONE' : opts.charset);
+    if (opts.owner) pb.string(Dpb.owner, opts.owner);
   }
   return pb.toBuffer();
 }
