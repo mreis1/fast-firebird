@@ -145,11 +145,10 @@ only when API surface stabilizes (avoid premature package fragmentation).
       2026-07-17: npm org `fast-firebird` registered; per-package READMEs,
       `publishConfig`, release-triggered publish workflow with provenance
       (`.github/workflows/publish.yml`) in place; tarballs verified via
-      `npm pack --dry-run`. 2026-07-18: diary stays public (decision) — tone
-      pass over other-project mentions DONE; history rewrite rehearsed and
-      ready (runbook in diary 07-17, awaiting go).
-      Remaining (user): make repo public (provenance requires it), add
-      `NPM_TOKEN` secret, create GitHub Release `v0.1.0`.
+      `npm pack --dry-run`. 2026-07-18: tone pass over other-project mentions
+      DONE; history rewrite EXECUTED on GitHub (second remote pending
+      decision). Remaining (user): make repo public (provenance requires
+      it), add `NPM_TOKEN` secret, create GitHub Release `v0.1.0`.
 - [ ] (post-publish, demand-driven) Drizzle relational `with:` via client-side
       query decomposition — Option B in `plans/drizzle.md` ("Relational with:
       — fix paths"). Upstream FB6 JSON work tracked there too (#5431/#9062;
