@@ -18,6 +18,11 @@ vector paths) with the wordmark/tagline as real SVG text, `textLength`-locked so
 layout is stable across font stacks. Wordmark style: `fast-` `#C0562A`,
 `firebird` gradient `#FF6A2C → #FFB13C`, weight 800; tagline monospace `#8b99a8`.
 
+## Screenshots
+
+- `png/demo-dashboard.png` — full-page capture of the live demo dashboard
+  (`apps/demo`), embedded in the root README.
+
 ## Previous kit (kept)
 
 - `logo.svg` — original horizontal wordmark lockup (drawn flame mark).

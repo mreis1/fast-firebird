@@ -79,8 +79,8 @@ importers:
         specifier: workspace:*
         version: link:../core
       node-firebird:
-        specifier: ^1.1.9
-        version: 1.1.10
+        specifier: ^2.10.0
+        version: 2.10.0
     devDependencies:
       tsx:
         specifier: ^4.19.0
@@ -664,6 +664,7 @@ packages:
 
   '@fast-firebird/core@file:packages/core':
     resolution: {directory: packages/core, type: directory}
+    engines: {node: '>=20'}
 
   '@fastify/accept-negotiator@2.0.1':
     resolution: {integrity: sha512-/c/TW2bO/v9JeEgoD/g1G5GxGeCF1Hafdf79WPmUlgYiBXummY0oX3VVq4yFkKKVBKDNlaDUYoab7g38RpPqCQ==}
@@ -979,10 +980,6 @@ packages:
     resolution: {integrity: sha512-c/jurFrDLyui7o1J86yLkRu4LMsTYcBohveus7/I2Hzdn9KIP2bdJPTue/lR1KH46enoPbD77GKeSYNdyPoD3Q==}
     engines: {node: '>=6.0.0'}
     hasBin: true
-
-  big-integer@1.6.52:
-    resolution: {integrity: sha512-QxD8cf2eVqJOOz63z6JIN9BzvVs/dlySa5HGSBH5xtR8dPteIRQnBxxKqkNTiT6jbDTF6jAfrd4oMcND9RGbQg==}
-    engines: {node: '>=0.6'}
 
   brace-expansion@5.0.7:
     resolution: {integrity: sha512-7oFy703dxfY3/NLxC1fh2SUCQ0H9rmAY+5EpDVfXjUTTs+HEwR2nYaqLv+GWcTsumwxPfiz6CzCNkwXwBUwqCA==}
@@ -1364,9 +1361,6 @@ packages:
     resolution: {integrity: sha512-IXO6OCs9yg8tMKzfPZ1YmheJbZCiEsnBdcB03l0OcfK9prKnJb96siuHCr5Fl37/yo9DnKU+TLpxzTUspw9shg==}
     engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
 
-  long@5.3.2:
-    resolution: {integrity: sha512-mNAgZ1GmyNhD7AuqnTG3/VQ26o760+ZYBPKjPvugO8+nLbYfX6TVpJPseBvopbdY+qpZ/lKUnmEc1LeZYS3QAA==}
-
   loose-envify@1.4.0:
     resolution: {integrity: sha512-lyuxPGr/Wfhrlem2CL/UcnUc1zcqKAImBDzukY7Y5F/yQiNdko6+fRLevlw1HgMySw7f611UIY408EtxRSoK3Q==}
     hasBin: true
@@ -1417,8 +1411,8 @@ packages:
   node-firebird-2-ext@file:references/node-firebird2-ext:
     resolution: {directory: references/node-firebird2-ext, type: directory}
 
-  node-firebird@1.1.10:
-    resolution: {integrity: sha512-/U2DmoqidETduvh7Y+fX7dlo5aWc0Vjd7wjSnDQWZ/L0UFVJiOKtR8fPRbvn+3HxQiYeexco8W2Px2hdrDT2Ew==}
+  node-firebird@2.10.0:
+    resolution: {integrity: sha512-lyze1E52dy8OdzebECYCtODoKFTwuHDl/+icHM3m6wikflQgr8B+jkOGEfNqyk2ALl/dFuO9d/3aG9JwYdBauA==}
 
   node-releases@2.0.51:
     resolution: {integrity: sha512-wRNIrw4DmVLKQlbgOMdkMx27Wrpzes2hh5Jtbi2bjPd+4wJstWIqP5A+lscnqbm0xxmT5Bpg8Lec5ItEBwx6BQ==}
@@ -2528,8 +2522,6 @@ snapshots:
 
   baseline-browser-mapping@2.10.42: {}
 
-  big-integer@1.6.52: {}
-
   brace-expansion@5.0.7:
     dependencies:
       balanced-match: 4.0.4
@@ -2872,8 +2864,6 @@ snapshots:
 
   load-tsconfig@0.2.5: {}
 
-  long@5.3.2: {}
-
   loose-envify@1.4.0:
     dependencies:
       js-tokens: 4.0.0
@@ -2925,10 +2915,7 @@ snapshots:
       moment: 2.30.1
       rxjs: 7.8.2
 
-  node-firebird@1.1.10:
-    dependencies:
-      big-integer: 1.6.52
-      long: 5.3.2
+  node-firebird@2.10.0: {}
 
   node-releases@2.0.51: {}
 

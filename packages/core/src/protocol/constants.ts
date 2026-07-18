@@ -113,6 +113,12 @@ export const PROTOCOL_VERSION16 = FB_PROTOCOL_FLAG | 16; // FB4/FB5
 // send (op_execute timeout/cursor_flags/inline_blob_size) is already encoded
 // per negotiated version in executeStatement.
 export const PROTOCOL_VERSION19 = FB_PROTOCOL_FLAG | 19; // FB 5.0.2+
+// Protocol 20 (FB6): op_prepare_statement/op_exec_immediate carry a trailing
+// p_sqlst_flags short (IStatement::PREPARE_* — 0 is valid, the server ORs it
+// with flags derived from the requested info items). A v20 server BLOCKS
+// waiting for the field, so it must be sent iff the negotiated version is 20.
+// Pre-FB6 servers read at most 10 p_cnct_versions offers; we send 6.
+export const PROTOCOL_VERSION20 = FB_PROTOCOL_FLAG | 20; // FB6
 
 export const enum Ptype {
   rpc = 2,
@@ -130,6 +136,7 @@ export const SUPPORTED_PROTOCOLS: ReadonlyArray<readonly [number, number, number
   [PROTOCOL_VERSION15, ARCHITECTURE_GENERIC, Ptype.lazy_send, Ptype.lazy_send, 3],
   [PROTOCOL_VERSION16, ARCHITECTURE_GENERIC, Ptype.lazy_send, Ptype.lazy_send, 4],
   [PROTOCOL_VERSION19, ARCHITECTURE_GENERIC, Ptype.lazy_send, Ptype.lazy_send, 5],
+  [PROTOCOL_VERSION20, ARCHITECTURE_GENERIC, Ptype.lazy_send, Ptype.lazy_send, 6],
 ];
 
 export const enum WireCryptLevel {

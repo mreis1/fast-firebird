@@ -16,7 +16,8 @@ describe.each(FB_SERVERS)('inline blobs on Firebird $version', ({ port, version 
   const N = 20;
   const SMALL = Buffer.alloc(4_000, 0x5a); // well under 64K → inlined on FB5
   const BIG = Buffer.alloc(200_000, 0x42); // over 64K → normal pipeline
-  const fb5 = version === 5;
+  // Inline blobs need protocol >= 19: FB5 (5.0.2+) negotiates 19, FB6 → 20.
+  const hasInlineBlobs = version >= 5;
 
   beforeAll(async () => {
     db = await freshDb(port);
@@ -36,9 +37,12 @@ describe.each(FB_SERVERS)('inline blobs on Firebird $version', ({ port, version 
     await db?.dropDatabase();
   });
 
-  it(`negotiates protocol ${version === 5 ? 19 : version === 3 ? 15 : 16}`, () => {
-    // FB3 tops out at P15, FB4 at P16 (we don't offer 17/18), FB 5.0.2+ at P19.
-    expect(db.protocolVersion).toBe(version === 5 ? 19 : version === 3 ? 15 : 16);
+  // FB3 tops out at P15, FB4 at P16 (we don't offer 17/18), FB 5.0.2+ at
+  // P19, FB6 at P20.
+  const expectedProtocol = { 3: 15, 4: 16, 5: 19, 6: 20 }[version];
+
+  it(`negotiates protocol ${expectedProtocol}`, () => {
+    expect(db.protocolVersion).toBe(expectedProtocol);
   });
 
   it('eager fetch: small blobs cost (almost) no extra round trips on FB5', async () => {
@@ -58,7 +62,7 @@ describe.each(FB_SERVERS)('inline blobs on Firebird $version', ({ port, version 
         expect(doc.length).toBe(SMALL.length);
         expect(r.MEMO).toBe(`memo €-${r.ID}`); // charset decode intact
       }
-      if (fb5) {
+      if (hasInlineBlobs) {
         // 2×N blobs rode inline with the rows — no per-blob wire work.
         expect(withBlobsRT).toBeLessThanOrEqual(noBlobRT + 1);
       } else {
@@ -83,7 +87,7 @@ describe.each(FB_SERVERS)('inline blobs on Firebird $version', ({ port, version 
       const chunks: Buffer[] = [];
       for await (const c of (rows[3]!.DOC as Blob).stream()) chunks.push(c as Buffer);
       expect(Buffer.concat(chunks).length).toBe(SMALL.length);
-      if (fb5) expect(db.roundTrips - before).toBe(0);
+      if (hasInlineBlobs) expect(db.roundTrips - before).toBe(0);
       else expect(db.roundTrips - before).toBeGreaterThan(0);
     });
   });
@@ -93,9 +97,9 @@ describe.each(FB_SERVERS)('inline blobs on Firebird $version', ({ port, version 
       const rows = await tx.query(`select doc from ${t} where id <= ${N}`, [], { blobs: 'lazy' });
       const before = db.roundTrips;
       await prefetchBlobs(rows.map((r) => r.DOC as Blob));
-      if (fb5) expect(db.roundTrips - before).toBe(0);
+      if (hasInlineBlobs) expect(db.roundTrips - before).toBe(0);
       for (const r of rows) expect(((await (r.DOC as Blob).buffer()) as Buffer).length).toBe(SMALL.length);
-      if (fb5) expect(db.roundTrips - before).toBe(0);
+      if (hasInlineBlobs) expect(db.roundTrips - before).toBe(0);
     });
   });
 
@@ -159,7 +163,7 @@ describe.each(FB_SERVERS)('inline blobs on Firebird $version', ({ port, version 
       await tx.query(`select doc, memo from ${t} where id <= ${N}`, [], { blobs: 'lazy' }); // handles never read
     });
     const inline = (db as any).session.inline;
-    if (fb5) expect(inline.size).toBe(0); // unread entries died with the tx
+    if (hasInlineBlobs) expect(inline.size).toBe(0); // unread entries died with the tx
     // Connection stays healthy.
     const [r] = await db.query(`select count(*) as c from ${t}`);
     expect(Number(r!.C)).toBe(N + 2);

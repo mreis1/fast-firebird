@@ -165,9 +165,9 @@ export const nodeFirebird: BenchDriver = {
   name: 'node-firebird',
   connect(host, port, database) {
     return new Promise((resolve, reject) => {
-      // npm node-firebird 1.x supports only plain Srp (Srp256 not released).
-      // pluginName isn't in its published types, hence the cast.
-      const opts = { host, port, database, ...CREDS, lowercase_keys: false, pluginName: 'Srp' };
+      // node-firebird 2.x negotiates Srp256 and inline blobs by default —
+      // both drivers run at their out-of-the-box settings.
+      const opts = { host, port, database, ...CREDS, lowercase_keys: false };
       Firebird.attach(opts as never, (err: Error | null, db: NfDb) => {
         if (err) return reject(err);
         resolve(new NodeFirebirdConn(db));

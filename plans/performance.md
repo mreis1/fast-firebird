@@ -122,6 +122,40 @@ Findings, verified not assumed:
   ≈ the 3847 ms pure-fetch floor, vs 7546 ms on-demand (1.9×). With zero
   consumer work between rows, readAhead ≈ on-demand — expected, now measured.
 
+## Results 2026-07-18 (re-run vs node-firebird 2.10.0)
+
+Context: node-firebird's 2.x modernization sprint (2.4.0→2.10.0, Jul 13–17 —
+TypeScript, promises, batch API, pool, statement cache, protocol 20) made the
+1.1.10 comparison indefensible for launch. Re-ran the full suite, defaults vs
+defaults, FB5, same harness.
+
+| Scenario | 0ms | 2ms | 10ms |
+|---|---|---|---|
+| connect+detach ×10 | 0.8× | 1.2× | 1.2× |
+| warm 1-row select ×200 (autocommit) | 1.6× | 1.7× | 1.8× |
+| warm select ×200 (open tx) | 3.0× | 3.1× | 3.1× |
+| 10k-row scan ×3 | 1.1× | 1.3× | 1.7× |
+| insert 300 rows (1 tx) | 1.7× | 1.6× | 1.9× |
+| 1MB blob write+read ×3 | 21.0× | 115.2× | 151.6× |
+| scan 300×8KB blobs | 33.2× | 123.6× | 139.5× |
+
+Findings vs the 1.1.10 numbers:
+- The 2.x modernization did NOT change the wire mechanics that dominate these
+  workloads: blob reads are still a sequential per-blob open/read/close cycle
+  in 1KB chunks (default `blobReadChunkSize: 1024`), so the blob gaps hold
+  (and widened slightly at 0ms: 11→21× on 1MB, 27→33× on the memo scan).
+- Non-blob gaps essentially unchanged (open-tx selects 3.0–3.1×, inserts
+  1.6–1.9×, scans 1.1–1.7×) — their statement cache defaults to OFF
+  (`statementCacheSize: 0`) and defaults-vs-defaults is the methodology.
+- Bare connect at 0ms remains our one loss (0.8×): wireCrypt on by default.
+- Their `maxInlineBlobSize` DPB now works (2.10.0 fixed the tag), but their
+  blob-callback read path didn't benefit in this workload.
+
+Blob strategy matrix re-measured same session (README table refreshed):
+inline 32/159/582 ms (21 RT), pipelined 60/400/1740 (217 RT), lazy on-demand
+314/3700/14695 (607 RT); readAhead+10ms-work 3867 ms at 2ms vs 7352 on-demand
+— overlap conclusion from 07-16 unchanged.
+
 ## Benchmark harness (packages/benchmarks)
 
 - Compare: fast-firebird vs node-firebird vs node-firebird2.
@@ -137,5 +171,5 @@ Findings, verified not assumed:
 Harness shipped with M3 (latency proxy, RT counter, markdown report).
 Expanded 2026-07-16 for the open-source release: many-small-blobs scan
 (pairwise) + fast-firebird blob strategy matrix (inline / pipelined eager /
-lazy stream ± readAhead ± consumer work). Results above are in the README's
-performance section.
+lazy stream ± readAhead ± consumer work). Re-run 2026-07-18 against
+node-firebird 2.10.0 (see Results above) — README tables cite 2.10.0 now.

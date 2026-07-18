@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@fast-firebird/core": "workspace:*",
-    "node-firebird": "^1.1.9"
+    "node-firebird": "^2.10.0"
   },
   "devDependencies": {
     "tsx": "^4.19.0"

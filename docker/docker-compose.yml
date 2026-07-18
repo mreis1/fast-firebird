@@ -72,6 +72,22 @@ services:
     volumes:
       - fast-firebird-test-fb5-data:/var/lib/firebird/data
 
+  # Firebird 6 snapshot — protocol 20. Snapshot builds move; the suite treats
+  # this lane as the canary for FB6 changes (schemas, protocol 20 prepare).
+  fb6:
+    <<: *fb-common
+    image: firebirdsql/firebird:6-snapshot
+    container_name: fast-firebird-test-fb6
+    ports:
+      - "127.0.0.1:30507:3050"
+      - "127.0.0.1:3057:3057"
+    environment:
+      <<: *fb-env
+      FIREBIRD_CONF_WireCryptPlugin: ChaCha20, ChaCha, ChaCha64, Arc4
+      FIREBIRD_CONF_RemoteAuxPort: "3057"
+    volumes:
+      - fast-firebird-test-fb6-data:/var/lib/firebird/data
+
   # Legacy_Auth server for testing the migration path (SRP disabled).
   fblegacy:
     <<: *fb-common
@@ -101,5 +117,7 @@ volumes:
     name: fast-firebird-test-fb4-data
   fast-firebird-test-fb5-data:
     name: fast-firebird-test-fb5-data
+  fast-firebird-test-fb6-data:
+    name: fast-firebird-test-fb6-data
   fast-firebird-test-fblegacy-data:
     name: fast-firebird-test-fblegacy-data

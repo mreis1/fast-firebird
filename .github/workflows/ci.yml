@@ -1,5 +1,5 @@
 # fast-firebird CI: typecheck + build + full test suite against a real
-# Firebird 3/4/5 (+ Legacy_Auth) container matrix — the same compose file
+# Firebird 3/4/5/6-snapshot (+ Legacy_Auth) container matrix — the same compose file
 # used for local development, so CI and dev environments cannot drift.
 name: CI
 

@@ -4,8 +4,8 @@
 
 <p align="center">
   A next-generation Firebird SQL driver for Node.js — <b>pure TypeScript</b>, zero native
-  dependencies, speaking the Firebird wire protocol directly (protocols 13–19) with
-  first-class support for <b>Firebird 3, 4, and 5</b>.
+  dependencies, speaking the Firebird wire protocol directly (protocols 13–20) with
+  first-class support for <b>Firebird 3, 4, and 5</b> — plus <b>Firebird 6</b> (snapshot, protocol 20).
 </p>
 
 <p align="center">
@@ -37,31 +37,33 @@ await db.disconnect();      // or: await using db = await connect({ … })
 
 ## Why another Firebird driver?
 
-The existing Node.js options each stop short in a different place, and both are
-projects we learned a lot from. `node-firebird` deserves particular respect
-here: it carried this maintainer's production systems for years, and much of
-the Node + Firebird community with it. But it grew up in the callback era, and
-the technical debt that accumulates over a decade — together with its
-deliberate retro-compatibility with very old Node.js versions — limits what it
-can adopt: coverage of newer server features, protocols and types remains
-partial. `node-firebird-driver-native` is well-engineered but binds to the
-native `fbclient` library, which complicates containers, serverless platforms,
-and simple onboarding.
+The existing Node.js options are projects we learned a lot from, and
+`node-firebird` deserves particular respect: it carried this maintainer's
+production systems for years, and much of the Node + Firebird community with
+it. It grew up in the callback era and spent a decade prioritizing
+compatibility with very old Node.js versions; its recent 2.x line has been
+modernizing at an impressive pace (TypeScript, promises, protocol 20).
+`node-firebird-driver-native` is well-engineered but binds to the native
+`fbclient` library, which complicates containers, serverless platforms, and
+simple onboarding.
 
-fast-firebird makes the opposite, deliberately disruptive choice: no
-backwards-compatibility baggage, a modern Node.js baseline (≥ 20), and modern
-engineering practices throughout. It aims to be the option that doesn't stop
-short: a pure-TypeScript,
-promise-native driver that speaks the modern wire protocol (up to protocol 19)
-with Srp256 authentication and Arc4/ChaCha wire encryption, covers the full
-FB4/5 type system (DECFLOAT, INT128, `TIMESTAMP/TIME WITH TIME ZONE` with the
-zone preserved), rides FB5 inline blobs, and ships the surrounding pieces —
-backpressured streaming, events, the Services API, a connection pool, a script
-parser, and a Drizzle ORM adapter — in one coherent package.
+fast-firebird is different by design rather than by patching: it started from
+a blank page in 2026 with a modern Node.js baseline (≥ 20), no
+backwards-compatibility baggage, and the wire protocol itself as the design
+center. Round trips are treated as the scarcest resource — counted, exposed
+(`Attachment.roundTrips`), and asserted exactly in the driver's own tests —
+which is a property you architect in from the start, not one you retrofit. On
+top of that sits a pure-TypeScript, promise-native driver that speaks the
+modern wire protocol (up to protocol 20) with Srp256 authentication and
+Arc4/ChaCha wire encryption, covers the full FB4/5 type system (DECFLOAT,
+INT128, `TIMESTAMP/TIME WITH TIME ZONE` with the zone preserved), rides
+FB5/FB6 inline blobs, and ships the surrounding pieces — backpressured
+streaming, events, the Services API, a connection pool, a script parser, and a
+Drizzle ORM adapter — in one coherent package.
 
-The engineering is test-driven against real servers: **784 core tests + 66
-Drizzle tests** run in CI against a real Firebird 3/4/5 container matrix, many
-of them asserting exact wire round-trip counts, byte-exact blob content
+The engineering is test-driven against real servers: **1016 core tests + 88
+Drizzle tests** run in CI against a real Firebird 3/4/5/6 container matrix,
+many of them asserting exact wire round-trip counts, byte-exact blob content
 (SHA-verified), and error-path connection reuse. Design trade-offs are
 documented where you'll hit them (eager-by-default blobs, lazy-handle
 transaction scoping, the statement-cache metadata-pinning caveat), and the
@@ -73,7 +75,7 @@ transaction scoping, the statement-cache metadata-pinning caveat), and the
 - **Queries** — promise API (`query`, `queryOne`, `run`, `execute`), typed rows `query<T>()`, prepared statements, per-connection LRU statement cache, adaptive batched fetching with per-query `fetchSize`
 - **Result shaping** — `ColumnInfo` metadata, `rowMode: 'array'`, `exclude`/`only` column filters, `expandStar` (`select *` rewritten to explicit columns before prepare)
 - **Streaming** — `queryStream` async iterator with batch-level backpressure
-- **Blobs** — eager or lazy (per subtype, per column), 64KB segments with cross-blob pipelining, partial reads (`head()`) with resume, streaming reads/writes, read-ahead for streams, batch prefetch, `toFile()`, FB5 inline blobs (small blobs cost zero round trips)
+- **Blobs** — eager or lazy (per subtype, per column), 64KB segments with cross-blob pipelining, partial reads (`head()`) with resume, streaming reads/writes, read-ahead for streams, batch prefetch, `toFile()`, FB5/FB6 inline blobs (small blobs cost zero round trips)
 - **Types** — every scalar type including DECFLOAT(16/34), INT128, and zone-preserving `ZonedDate`
 - **Transactions** — isolation/read-only/lock-wait options, `restart()`, nested transactions via savepoints, opt-in RO→RW auto-upgrade, `await using` support
 - **Ecosystem** — connection pool, `POST_EVENT` listener, Services API (server info, gstat, gbak backup/restore), isql-faithful script parser, Drizzle ORM adapter (with nested transactions, plain-SQL migrator, RDB$ introspection → schema codegen), legacy `CHARSET NONE` transcoding toolkit
@@ -367,7 +369,7 @@ strings and bind back as parameters (JS `Infinity`/`NaN` numbers work too).
 
 Every connection keeps an LRU cache of prepared statements keyed by SQL text
 (`statementCacheSize`, default 64; `0` disables). Measured round trips,
-asserted by integration tests on FB 3/4/5:
+asserted by integration tests on FB 3/4/5/6:
 
 | Operation (inside an open transaction) | Round trips |
 |-----------------------------------------|-------------|
@@ -445,7 +447,7 @@ const rows = await orm.select().from(users).where(eq(users.id, 1));
 Firebird is Postgres-shaped, so the adapter reuses Drizzle's pg-core query
 builder with a Firebird dialect (parameter binding, `FIRST/SKIP` pagination,
 `RETURNING`) and Firebird-correct date/time/blob column types. Nested
-`tx.transaction()` works via savepoints. 66 integration tests against FB 3/4/5.
+`tx.transaction()` works via savepoints. 88 integration tests against FB 3/4/5/6.
 
 **Relational queries**: flat `db.query.users.findMany()`/`findFirst()`
 (columns/where/orderBy/limit/offset) work — they compile to plain selects.
@@ -570,24 +572,27 @@ fbclient). SRP256/SRP remain the default for modern servers.
 
 ## Performance vs node-firebird
 
-Measured against `node-firebird` 1.1.10 on Firebird 5 with an in-process
-latency proxy (`pnpm --filter @fast-firebird/benchmarks bench`), defaults vs
-defaults. Columns are one-way link delay (RTT ≈ 2×):
+Measured against `node-firebird` **2.10.0** (the current, substantially
+modernized 2.x line — re-measured 2026-07-18) on Firebird 5 with an
+in-process latency proxy (`pnpm --filter @fast-firebird/benchmarks bench`),
+defaults vs defaults. Columns are one-way link delay (RTT ≈ 2×):
 
 | Scenario | 0ms | 2ms | 10ms |
 |---|---|---|---|
-| warm select ×200 (open tx) | 2.6× | 2.9× | 3.0× |
-| 10k-row scan | 1.1× | 1.3× | 1.6× |
-| 300-row insert (1 tx) | 1.6× | 2.0× | 2.0× |
-| **1MB blob write+read** | **11×** | **109×** | **149×** |
-| **scan 300 rows × 8KB blobs** | **27×** | **123×** | **133×** |
+| warm select ×200 (open tx) | 3.0× | 3.1× | 3.1× |
+| 10k-row scan | 1.1× | 1.3× | 1.7× |
+| 300-row insert (1 tx) | 1.7× | 1.6× | 1.9× |
+| **1MB blob write+read** | **21×** | **115×** | **152×** |
+| **scan 300 rows × 8KB blobs** | **33×** | **124×** | **140×** |
 
-Blobs dominate because legacy drivers use 1KB segments (~1000 round trips per
-MB) and open/read/close each blob sequentially; fast-firebird uses 64KB
+Blobs dominate because node-firebird reads each blob sequentially through a
+per-blob open/read/close cycle in 1KB chunks (its default
+`blobReadChunkSize`) — ~1000 round trips per MB; fast-firebird uses 64KB
 segments with deep pipelining — and on FB 5.0.2+ small blobs ride inline with
-the rows for zero extra round trips. The one case where fast-firebird can be
-slower — bare connect — is because it encrypts the wire by default (SRP256 +
-`op_crypt`); pass `wireCrypt: 'disabled'` to match.
+the rows for zero extra round trips. The one case where fast-firebird is
+slower — bare connect+detach on a 0ms link (0.8×) — is because it encrypts
+the wire by default (SRP256 + `op_crypt`); pass `wireCrypt: 'disabled'` to
+match.
 
 ### Where the blob speedup comes from
 
@@ -596,19 +601,19 @@ The same 300×8KB scan run under each of fast-firebird's blob strategies
 
 | Strategy | 0ms | 2ms | 10ms |
 |---|---|---|---|
-| eager + FB5 inline blobs (default) | 42 ms (21 RT) | 149 ms (21 RT) | 566 ms (21 RT) |
-| eager, inline off (pipelined open/read/close) | 68 ms (217 RT) | 413 ms (217 RT) | 1778 ms (217 RT) |
-| `queryStream` lazy, on-demand | 362 ms (607 RT) | 4062 ms (607 RT) | 15390 ms (607 RT) |
-| `queryStream` lazy + `blobReadAhead`, 10ms/row consumer work | 3339 ms | 3944 ms | 14690 ms |
-| `queryStream` lazy on-demand, 10ms/row consumer work | 4372 ms | 7546 ms | 18414 ms |
+| eager + FB5 inline blobs (default) | 32 ms (21 RT) | 159 ms (21 RT) | 582 ms (21 RT) |
+| eager, inline off (pipelined open/read/close) | 60 ms (217 RT) | 400 ms (217 RT) | 1740 ms (217 RT) |
+| `queryStream` lazy, on-demand | 314 ms (607 RT) | 3700 ms (607 RT) | 14695 ms (607 RT) |
+| `queryStream` lazy + `blobReadAhead`, 10ms/row consumer work | 3295 ms | 3867 ms | 14566 ms |
+| `queryStream` lazy on-demand, 10ms/row consumer work | 3725 ms | 7352 ms | 17902 ms |
 
 Reading the table: FB5 inline blobs eliminate blob round trips entirely (21
 vs 217); eager pipelining amortizes open/read/close across the batch (~0.7 RT
 per blob vs 2 sequential ones on the lazy path). `blobReadAhead` doesn't cut
 round trips — it overlaps them with your per-row processing: with 10ms of
 consumer work per row (a disk write, an image resize), read-ahead hides the
-blob fetches almost completely at 2ms link delay (3.9s ≈ the 3.8s pure-fetch
-floor, vs 7.5s on-demand). Use eager (the default) when rows fit in memory;
+blob fetches almost completely at 2ms link delay (3.9s ≈ the 3.7s pure-fetch
+floor, vs 7.4s on-demand). Use eager (the default) when rows fit in memory;
 stream + read-ahead when they don't.
 
 ## Design highlights
@@ -619,8 +624,8 @@ stream + read-ahead when they don't.
   fetch batching sized from the described row width. `Attachment.roundTrips`
   exposes the flush counter for your own budget assertions — many of the
   driver's own tests assert exact counts.
-- **Modern protocol**: offers protocols 13–16 and 19 (FB3 negotiates 15,
-  FB4 → 16, FB5 → 19), which is what unlocks FB5 inline blobs.
+- **Modern protocol**: offers protocols 13–16, 19 and 20 (FB3 negotiates 15,
+  FB4 → 16, FB5 → 19, FB6 → 20), which is what unlocks FB5/FB6 inline blobs.
 - **Faithful SRP**: Firebird's non-standard SRP-6a variant (modPow proof mixing,
   `(a + u·x) mod N`, SHA-1 session key) implemented with `node:crypto` + BigInt.
 - **Real error messages**: complete gds→message table (2539 entries) generated
@@ -628,9 +633,28 @@ stream + read-ahead when they don't.
   `FirebirdError`.
 - **Charset layer resolved at prepare time**: zero per-cell branching; UTF8 and
   latin1 use native Buffer fast paths, everything else iconv-lite.
-- **Tested against real servers**: 784 core + 66 Drizzle tests across a
-  Firebird 3/4/5 (+ Legacy_Auth) Docker matrix, in CI on every push — the same
-  compose file as local development, so the environments cannot drift.
+- **Tested against real servers**: 1016 core + 88 Drizzle tests across a
+  Firebird 3/4/5/6-snapshot (+ Legacy_Auth) Docker matrix, in CI on every
+  push — the same compose file as local development, so the environments
+  cannot drift.
+
+## Live demo dashboard
+
+`apps/demo` is an interactive dashboard that exercises the whole stack against
+real Firebird 3/4/5 servers: connection/pool introspection (wire protocol,
+encryption, compression, charset), a SQL runner that executes the same query
+through core, Drizzle and the compat layer side by side, a feature explorer
+for what each Firebird version unlocks, live `POST_EVENT`s, backpressured row
+streaming, blob round-trips, and per-stack micro-benchmarks.
+
+```sh
+pnpm fb:up                        # start the isolated FB 3/4/5/6 containers
+pnpm --filter @fast-firebird/demo dev
+```
+
+<p align="center">
+  <img src="./assets/png/demo-dashboard.png" alt="fast-firebird live demo dashboard" width="820">
+</p>
 
 ## Monorepo layout
 
@@ -643,7 +667,7 @@ plans/                 living design docs (architecture, performance, charsets, 
 plans/research/        protocol notes extracted from node-firebird(2), jaybird,
                        rsfbclient and the Firebird core source
 diary/                 daily engineering log
-docker/                isolated FB 3/4/5 test matrix (compose project fast-firebird-test)
+docker/                isolated FB 3/4/5/6 test matrix (compose project fast-firebird-test)
 scripts/               codegen + safe docker cleanup
 ```
 
@@ -651,7 +675,7 @@ scripts/               codegen + safe docker cleanup
 
 ```sh
 pnpm install
-pnpm fb:up            # start isolated Firebird 3/4/5 containers (ports 30503-30505)
+pnpm fb:up            # start isolated Firebird 3/4/5/6 containers (ports 30503-30507)
 pnpm test             # unit + integration
 pnpm fb:down          # remove ONLY this project's containers/volumes/network
 ```

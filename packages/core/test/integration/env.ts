@@ -3,13 +3,15 @@ export interface FbServer {
   name: string;
   port: number;
   /** Major server version. */
-  version: 3 | 4 | 5;
+  version: 3 | 4 | 5 | 6;
 }
 
 export const FB_SERVERS: FbServer[] = [
   { name: 'fb3', port: 30503, version: 3 },
   { name: 'fb4', port: 30504, version: 4 },
   { name: 'fb5', port: 30505, version: 5 },
+  // FB6 snapshot (protocol 20). Set FB_SKIP_FB6=1 to run the stable trio only.
+  ...(process.env.FB_SKIP_FB6 ? [] : [{ name: 'fb6', port: 30507, version: 6 as const }]),
 ];
 
 export const FB_BASE = {

@@ -268,7 +268,19 @@ only when API surface stabilizes (avoid premature package fragmentation).
   strictly isolated per `plans/docker-safety.md`.
 - Regression: `CHARSET NONE` + win1252 round-trips (€, smart quotes, em dash).
 
-## Current status (2026-07-13)
+## Current status (2026-07-18)
+FB6/protocol 20 shipped: PROTOCOL_VERSION20 offered (weight 6), trailing
+`p_sqlst_flags` short on op_prepare_statement when v20 negotiated (a v20
+server blocks without it — the same bug node-firebird fixed in 2.10.0), fb6
+lane (firebirdsql/firebird:6-snapshot, port 30507) in the compose matrix +
+both test envs (`FB_SKIP_FB6=1` opt-out). 1016 core + 88 drizzle tests green
+on FB3/4/5/6 — FB6 inherits inline blobs (P20 ≥ P19) with zero-RT small-blob
+reads verified. Context: node-firebird 2.x modernization sprint (2.4.0→2.10.0,
+Jul 13–17: TS, promises, batch API, pool, statement cache, P20) — benchmarks
+re-run against 2.10.0, README positioning rewritten for the 2.x reality
+(differentiation: wire-first design, RT discipline, 4-server test matrix).
+
+## Previous status (2026-07-13)
 M0–M5.5 complete. M6 essentially delivered: Drizzle adapter (30 tests),
 node-firebird2-ext swap (branch `fast-firebird`, 9/9), live demo dashboard with
 feature explorer + custom benchmark + connection lifecycle/tx-wait/compression/

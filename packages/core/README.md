@@ -6,7 +6,7 @@
 
 A next-generation Firebird SQL driver for Node.js — **pure TypeScript**, zero
 native dependencies, speaking the Firebird wire protocol directly (protocols
-13–19) with first-class support for **Firebird 3, 4, and 5**.
+13–20) with first-class support for **Firebird 3, 4, and 5** — plus **Firebird 6** (snapshot, protocol 20).
 
 ```ts
 import { connect } from '@fast-firebird/core';
@@ -47,7 +47,7 @@ await db.disconnect();
   backup/restore).
 - **Real error messages** — the full gds→message table (2539 entries) with
   SQLSTATE and complete status vector on every `FirebirdError`.
-- **Tested against real servers** — 784 tests across a Firebird 3/4/5
+- **Tested against real servers** — 1016 tests across a Firebird 3/4/5/6
   (+ Legacy_Auth) Docker matrix on every push.
 
 ## Drizzle ORM

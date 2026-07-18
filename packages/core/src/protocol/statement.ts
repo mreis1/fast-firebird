@@ -40,6 +40,9 @@ export async function allocateAndPrepare(
     .string(sql)
     .opaque(DESCRIBE_INFO_ITEMS)
     .int32(65535);
+  // Protocol 20 (FB6): trailing p_sqlst_flags (xdr short = 4 bytes on the
+  // wire). Mandatory — a v20 server blocks reading the prepare without it.
+  if (wire.protocolVersion >= 20) wire.writer.int32(0);
   wire.flush();
 
   const allocResp = await wire.readResponse(); // op_allocate_statement

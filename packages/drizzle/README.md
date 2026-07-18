@@ -4,7 +4,7 @@
 
 # @fast-firebird/drizzle
 
-[Drizzle ORM](https://orm.drizzle.team) dialect and driver for **Firebird 3/4/5**,
+[Drizzle ORM](https://orm.drizzle.team) dialect and driver for **Firebird 3/4/5/6**,
 powered by [`@fast-firebird/core`](https://www.npmjs.com/package/@fast-firebird/core)
 — pure TypeScript, zero native dependencies.
 
