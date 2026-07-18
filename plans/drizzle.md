@@ -108,5 +108,7 @@ would be a duplicate):**
   the fb6 snapshot lane. The day a snapshot ships them, CI goes red with a
   message pointing here — that's the trigger to build the single-query mode.
   (Live-verified 2026-07-18 on 6.0.0: no JSON tokens in parse.y, all three
-  functions raise syntax errors; node-firebird 2.4.0's "native JSON" release
-  note is overstated.)
+  functions raise syntax errors. node-firebird 2.4.0's release notes mention
+  native JSON for FB6 — presumably tracking the in-progress upstream work,
+  since the snapshot doesn't accept the functions yet; always verify against
+  a live server rather than release notes.)
