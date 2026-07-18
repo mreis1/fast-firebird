@@ -147,11 +147,11 @@ only when API surface stabilizes (avoid premature package fragmentation).
       `pnpm -r publish` with WebAuthn browser auth succeeded; workspace:*
       correctly rewritten to 0.1.0 in drizzle's manifest). Clean-room
       verified: fresh registry install → FB5 query, protocol 19, € intact.
-      Follow-ups: configure npm TRUSTED PUBLISHING on both packages
-      (Settings → Trusted Publisher → mreis1/fast-firebird + publish.yml) so
-      v0.1.1+ publish from CI with provenance and no token; then delete the
-      granular NPM_TOKEN. v0.1.0 has no provenance badge (local publish) —
-      cosmetic only.
+      Trusted Publishing configured on BOTH packages same day (publisher =
+      mreis1/fast-firebird + publish.yml, strict "disallow tokens" mode) and
+      the granular token deleted — v0.1.1+ publish from CI via OIDC with
+      provenance, zero secrets. v0.1.0 has no provenance badge (local
+      publish) — cosmetic only.
       2026-07-17: npm org `fast-firebird` registered; per-package READMEs,
       `publishConfig`, release-triggered publish workflow with provenance
       (`.github/workflows/publish.yml`) in place; tarballs verified via
