@@ -261,11 +261,26 @@ only when API surface stabilizes (avoid premature package fragmentation).
 13. ~~Native/WASM acceleration~~ (SIMD UTF-8, decimal128) — **WONT DO**
    (decided 2026-07-15): out of scope unless benchmarks prove a hard need
    (`plans/architecture.md`).
+14. FB6 attach options: `searchPath` (isc_dpb_search_path 105) and `owner`
+   (isc_dpb_owner 102, createDatabase) — small DPB additions, added
+   2026-07-18 after FB6/P20 shipped. Do before or shortly after v0.1.0;
+   schema-aware Drizzle introspection (RDB$SCHEMAS) waits for FB6 RC.
+15. Drizzle single-query relational mode gated on FB6 JSON — trigger is the
+   fb6-json-canary test going red (see plans/drizzle.md). Until then,
+   Option B (client-side decomposition) is the demand-driven path.
+16. TypeScript 6/7 toolchain upgrade — decided 2026-07-18: NOT before
+   v0.1.0 (typecheck is 1.5 s; the risk sits in tsup's d.ts generation via
+   the TS compiler API, exactly what the TS7 native rewrite replaced).
+   Path: 5.9 → 6.x bridge once stable → 7 when tsup/vitest declare support.
 
 ## Testing strategy
 - Unit: XDR, SRP vectors, type codec, charset, script parser — no server needed.
-- Integration: Docker FB 3/4/5 (`docker/docker-compose.yml`, project `fast-firebird-test`),
-  strictly isolated per `plans/docker-safety.md`.
+- Integration: Docker FB 3/4/5/6-snapshot (`docker/docker-compose.yml`,
+  project `fast-firebird-test`), strictly isolated per
+  `plans/docker-safety.md`. The fb6 lane is a moving snapshot tag — if an
+  upstream snapshot breaks it, set `FB_SKIP_FB6=1` (CI env) as the hotfix
+  and investigate; the fb6-json-canary failing is a FEATURE signal, not
+  breakage (see backlog #15).
 - Regression: `CHARSET NONE` + win1252 round-trips (€, smart quotes, em dash).
 
 ## Current status (2026-07-18)

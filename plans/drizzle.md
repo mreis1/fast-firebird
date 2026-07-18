@@ -103,3 +103,10 @@ would be a duplicate):**
   being reviewed); watch #5431/#9062. When FB6 ships JSON functions, add a
   capability-gated single-query RQB mode (like inline blobs gate on
   protocol 19) — until then Option B serves the FB3/4/5 installed base.
+- CANARY in place (2026-07-18): `packages/drizzle/test/integration/
+  fb6-json-canary.test.ts` asserts json_arrayagg/json_object are ABSENT on
+  the fb6 snapshot lane. The day a snapshot ships them, CI goes red with a
+  message pointing here — that's the trigger to build the single-query mode.
+  (Live-verified 2026-07-18 on 6.0.0: no JSON tokens in parse.y, all three
+  functions raise syntax errors; node-firebird 2.4.0's "native JSON" release
+  note is overstated.)
