@@ -5,9 +5,9 @@
 # main and green in CI — this workflow re-runs build + unit tests as a final
 # gate, but the full Firebird-matrix integration suite is CI's job.
 #
-# Auth: needs an npm Granular Access Token with read/write on the
-# fast-firebird org packages, stored as the NPM_TOKEN repo secret.
-# Provenance additionally needs the id-token permission below (OIDC).
+# Auth: npm Trusted Publishing (OIDC) — both packages trust this repo +
+# workflow on npm (package Settings → Trusted Publisher). No token secret.
+# The id-token permission below covers both auth and provenance.
 name: Publish
 
 on:
@@ -63,8 +63,9 @@ jobs:
 
       # -r skips private packages (root, benchmarks, demo); pnpm rewrites
       # workspace:* to the real version in the published manifests.
+      # Auth is npm Trusted Publishing (OIDC via the id-token permission) —
+      # no token secret; both packages trust mreis1/fast-firebird+publish.yml.
       - name: Publish to npm
         run: pnpm -r publish --access public --no-git-checks
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'true'

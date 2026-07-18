@@ -140,15 +140,25 @@ only when API surface stabilizes (avoid premature package fragmentation).
       version feature explorer (FB3/4/5 cards, runnable SQL), row streaming,
       blob round-trip, per-stack micro-benchmark, custom structure benchmark
       (user-defined columns + blob file picker, insert+fetch timings).
-- [ ] Publish `@fast-firebird/core` (npm or private registry) — blocks real
-      deployment of the nf2-ext branch (today a `file:` link).
+- [x] **PUBLISHED 2026-07-18**: `@fast-firebird/core@0.1.0` +
+      `@fast-firebird/drizzle@0.1.0` live on npm (repo public, GitHub Release
+      v0.1.0). First publish done locally (org 2FA policy blocks token
+      publishes from CI — granular token got E404 then EOTP; local
+      `pnpm -r publish` with WebAuthn browser auth succeeded; workspace:*
+      correctly rewritten to 0.1.0 in drizzle's manifest). Clean-room
+      verified: fresh registry install → FB5 query, protocol 19, € intact.
+      Follow-ups: configure npm TRUSTED PUBLISHING on both packages
+      (Settings → Trusted Publisher → mreis1/fast-firebird + publish.yml) so
+      v0.1.1+ publish from CI with provenance and no token; then delete the
+      granular NPM_TOKEN. v0.1.0 has no provenance badge (local publish) —
+      cosmetic only.
       2026-07-17: npm org `fast-firebird` registered; per-package READMEs,
       `publishConfig`, release-triggered publish workflow with provenance
       (`.github/workflows/publish.yml`) in place; tarballs verified via
       `npm pack --dry-run`. 2026-07-18: tone pass over other-project mentions
       DONE; history rewrite EXECUTED on GitHub (second remote pending
-      decision). Remaining (user): make repo public (provenance requires
-      it), add `NPM_TOKEN` secret, create GitHub Release `v0.1.0`.
+      decision); repo PUBLIC; Release v0.1.0 created; packages published
+      (see above).
 - [ ] (post-publish, demand-driven) Drizzle relational `with:` via client-side
       query decomposition — Option B in `plans/drizzle.md` ("Relational with:
       — fix paths"). Upstream FB6 JSON work tracked there too (#5431/#9062;
