@@ -13,7 +13,7 @@
   "bugs": "https://github.com/mreis1/fast-firebird/issues",
   "funding": "https://github.com/sponsors/mreis1",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "type": "module",
   "main": "./dist/index.cjs",

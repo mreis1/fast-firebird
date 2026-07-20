@@ -21,7 +21,7 @@ import { blobsMayProduceLazy, resolveOptions, type FirebirdConnectionOptions, ty
 import { Op } from '../protocol/constants.js';
 import { executeScript, type ExecuteScriptOptions, type ScriptExecutionResult } from '../script/execute.js';
 import { EventChannel, type EventListener } from '../events/events.js';
-import type { ParamValue } from '../protocol/msgcodec.js';
+import { rewriteNamedParams, type QueryParams } from './named-params.js';
 
 export type ConnectInput = FirebirdConnectionOptions & LegacyOptionAliases;
 
@@ -164,7 +164,7 @@ export class Attachment {
    * Type rows via the generic: `db.query<{ ID: number }>('select id from t')`.
    * (Compile-time shaping only — no runtime validation.)
    */
-  async query<T = Row>(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<T[]> {
+  async query<T = Row>(sql: string, params: QueryParams = [], options?: QueryOptions): Promise<T[]> {
     return (await this.run<T>(sql, params, options)).rows;
   }
 
@@ -173,7 +173,7 @@ export class Attachment {
    * is empty. The whole result set is still fetched — put `FIRST 1` (or a
    * unique predicate) in the SQL when the query could match many rows.
    */
-  async queryOne<T = Row>(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<T | undefined> {
+  async queryOne<T = Row>(sql: string, params: QueryParams = [], options?: QueryOptions): Promise<T | undefined> {
     return (await this.run<T>(sql, params, options)).rows[0];
   }
 
@@ -182,11 +182,14 @@ export class Attachment {
    * cache). Close it when done.
    */
   async prepare(sql: string): Promise<PreparedStatement> {
+    // Rewrite @name → ? once, at prepare time; the ordered names let the
+    // statement bind a named-params object on each run.
+    const { sql: wireSql, names } = rewriteNamedParams(sql);
     const tx = await this.startTransaction();
     try {
-      const info = await this.withLock(() => prepareInfo(this.session, tx.handle, sql));
+      const info = await this.withLock(() => prepareInfo(this.session, tx.handle, wireSql));
       await tx.commit(); // statements outlive the preparing transaction
-      return new PreparedStatement(this, info, sql);
+      return new PreparedStatement(this, info, sql, names);
     } catch (err) {
       if (!tx.isFinished) {
         try {
@@ -200,7 +203,7 @@ export class Attachment {
   }
 
   /** Run a single statement in its own transaction; returns rows + count. */
-  async run<T = Row>(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<QueryResult<T>> {
+  async run<T = Row>(sql: string, params: QueryParams = [], options?: QueryOptions): Promise<QueryResult<T>> {
     if (blobsMayProduceLazy(options?.blobs ?? this.options.blobs)) {
       throw new FirebirdBlobError(
         "lazy blob modes ('lazy', 'lazy-binary', 'lazy-text') require an explicit transaction or a stream — use db.transaction(tx => tx.query(…, {blobs:…})) or db.queryStream(…, {blobs:…}), or override with {blobs:'eager'}",
@@ -226,7 +229,7 @@ export class Attachment {
   }
 
   /** Run a single statement in its own transaction; returns affected count. */
-  async execute(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<number> {
+  async execute(sql: string, params: QueryParams = [], options?: QueryOptions): Promise<number> {
     return (await this.run(sql, params, options)).rowsAffected;
   }
 
@@ -274,7 +277,7 @@ export class Attachment {
     this.eventChannel = null;
   }
 
-  async *queryStream<T = Row>(sql: string, params: ParamValue[] = [], options?: QueryOptions): AsyncGenerator<T> {
+  async *queryStream<T = Row>(sql: string, params: QueryParams = [], options?: QueryOptions): AsyncGenerator<T> {
     const tx = await this.startTransaction();
     let ok = false;
     try {

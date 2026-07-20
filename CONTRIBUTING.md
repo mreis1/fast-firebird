@@ -5,7 +5,7 @@ environment, how the test matrix works, and what a good PR looks like.
 
 ## Prerequisites
 
-- **Node.js ≥ 20**
+- **Node.js ≥ 22**
 - **pnpm ≥ 9** (`corepack enable` is the easiest way)
 - **Docker** with the compose v2 plugin (for integration tests)
 

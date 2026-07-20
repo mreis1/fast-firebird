@@ -15,6 +15,13 @@ export { Blob, prefetchBlobs } from './api/blob.js';
 export { ZonedDate } from './types/zoned-date.js';
 export type { TransactionOptions, IsolationLevel } from './protocol/transaction.js';
 export type { ParamValue } from './protocol/msgcodec.js';
+export {
+  rewriteNamedParams,
+  FirebirdParamError,
+  type NamedParams,
+  type QueryParams,
+  type RewrittenSql,
+} from './api/named-params.js';
 export type { FirebirdConnectionOptions, LegacyOptionAliases, WireCryptOption, BlobMode, BlobColumnModes, BlobsOption, BlobReadAheadOption } from './api/options.js';
 export {
   FirebirdError,

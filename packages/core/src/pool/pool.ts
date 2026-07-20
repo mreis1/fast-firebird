@@ -2,7 +2,7 @@ import { connect, type Attachment, type ConnectInput } from '../api/attachment.j
 import type { Transaction } from '../api/transaction.js';
 import type { TransactionOptions } from '../protocol/transaction.js';
 import type { QueryResult, Row } from '../api/session.js';
-import type { ParamValue } from '../protocol/msgcodec.js';
+import type { QueryParams } from '../api/named-params.js';
 
 export interface PoolOptions extends ConnectInput {
   /** Connections kept warm even when idle. Default 0. */
@@ -237,20 +237,20 @@ export class Pool {
     return results;
   }
 
-  query<T = Row>(sql: string, params: ParamValue[] = []): Promise<T[]> {
+  query<T = Row>(sql: string, params: QueryParams = []): Promise<T[]> {
     return this.use((c) => c.query<T>(sql, params));
   }
 
   /** First row or `undefined` (see `Attachment.queryOne`). */
-  queryOne<T = Row>(sql: string, params: ParamValue[] = []): Promise<T | undefined> {
+  queryOne<T = Row>(sql: string, params: QueryParams = []): Promise<T | undefined> {
     return this.use((c) => c.queryOne<T>(sql, params));
   }
 
-  run<T = Row>(sql: string, params: ParamValue[] = []): Promise<QueryResult<T>> {
+  run<T = Row>(sql: string, params: QueryParams = []): Promise<QueryResult<T>> {
     return this.use((c) => c.run<T>(sql, params));
   }
 
-  execute(sql: string, params: ParamValue[] = []): Promise<number> {
+  execute(sql: string, params: QueryParams = []): Promise<number> {
     return this.use((c) => c.execute(sql, params));
   }
 

@@ -27,6 +27,9 @@ await db.disconnect();
 - **Fast on real networks** — statement allocate+prepare pipelined into one
   round trip, execute+fetch coalesced, adaptive fetch batching, deferred
   cleanup ops. `Attachment.roundTrips` exposes the flush counter.
+- **Positional or named parameters** — `?` with an array, or `@name` with an
+  object (`{ id: 1 }`); `@name` is conflict-free even inside PSQL bodies where
+  `:var` is a local variable. Rewritten to positional `?` client-side.
 - **Blobs done right** — eager by default (a `SELECT` gives you values), 64KB
   segments with deep pipelining, FB5 inline blobs (small blobs cost **zero**
   extra round trips), lazy modes per column/subtype, `blob.stream()`,
@@ -47,7 +50,7 @@ await db.disconnect();
   backup/restore).
 - **Real error messages** — the full gds→message table (2539 entries) with
   SQLSTATE and complete status vector on every `FirebirdError`.
-- **Tested against real servers** — 1016 tests across a Firebird 3/4/5/6
+- **Tested against real servers** — 1085 tests across a Firebird 3/4/5/6
   (+ Legacy_Auth) Docker matrix on every push.
 
 ## Drizzle ORM

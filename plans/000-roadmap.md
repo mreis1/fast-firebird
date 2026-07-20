@@ -288,6 +288,21 @@ only when API surface stabilizes (avoid premature package fragmentation).
    v0.1.0 (typecheck is 1.5 s; the risk sits in tsup's d.ts generation via
    the TS compiler API, exactly what the TS7 native rewrite replaced).
    Path: 5.9 → 6.x bridge once stable → 7 when tsup/vitest declare support.
+17. Wire batch API (op_batch_create/op_batch_msg/op_batch_exec, FB4+/P16+)
+   — bulk insert of many rows in one round trip, the biggest remaining RT
+   win for write-heavy workloads. node-firebird shipped `batchStream` with
+   backpressure in 2.13.0; ours should be the same shape as queryStream
+   (stream in, adaptive flush). Blob-in-batch (op_batch_blob_stream) can
+   come later.
+18. Multi-host pool (primary/replica cluster with failover) — node-firebird
+   2.14.0 shipped a mysql2-style PoolCluster. Demand-driven; our Pool
+   already has validation-on-borrow, so the cluster layer is routing +
+   health state on top.
+19. Qualified/nested object rows for duplicate JOIN columns — in object
+   mode identically-named JOIN columns overwrite; `rowMode:'array'` +
+   ColumnInfo.relation already give a correct escape hatch, and Drizzle
+   aliases everything, so this is a convenience gap only. If asked for:
+   a row-key option (per-table nesting or `REL_COL` qualified keys).
 
 ## Testing strategy
 - Unit: XDR, SRP vectors, type codec, charset, script parser — no server needed.
@@ -299,7 +314,33 @@ only when API surface stabilizes (avoid premature package fragmentation).
   breakage (see backlog #15).
 - Regression: `CHARSET NONE` + win1252 round-trips (€, smart quotes, em dash).
 
-## Current status (2026-07-18)
+## Current status (2026-07-20)
+Named parameters shipped: `@name` markers + an object of values, rewritten
+client-side to positional `?` and reordered (`packages/core/src/api/
+named-params.ts`). `@` chosen over `:name` because a leading colon is a PSQL
+local-variable reference — `@` is unambiguous even inside EXECUTE BLOCK. The
+rewrite reuses the script parser's lexing discipline (skips string/quoted-
+ident/q-literal/comment regions). Wired at the single execution funnel
+(`runStatement`/`streamRows`) so query/execute/stream/pool inherit it;
+prepared statements rewrite once at prepare time and carry the ordered names
+for per-run binding. Positional arrays unchanged; a named object against
+`?`-only SQL throws `FirebirdParamError`. 25 unit + 37 integration tests →
+**1085 core + 90 drizzle** green on FB3/4/5/6.
+
+## Status 2026-07-19
+Node.js baseline raised to the supported-LTS floor: `engines.node >=22`
+(Node 20 went EOL 2026-04-30; 22 is maintenance LTS until 2027-04, 24 is
+active LTS until 2028-04). CI + publish workflows run Node 24; local dev on
+22.16 keeps the floor exercised. Consumer-facing engines change — lands
+with the next release (v0.1.1+). node-firebird follow-up survey
+(2.11.0–2.14.0, all Jul 18): nestTables, result metadata/tagged
+templates/savepoints, single-byte codepages + batchStream + ESM, and
+PoolCluster. Most already exist here (savepoints via `tx.transaction()`,
+full single-byte charset table since M0, ESM+CJS exports, `rowMode:'array'`
++ column metadata); genuine gaps became backlog #17 (wire batch API — the
+real one) and #18 (multi-host pool).
+
+## Status 2026-07-18
 FB6/protocol 20 shipped: PROTOCOL_VERSION20 offered (weight 6), trailing
 `p_sqlst_flags` short on op_prepare_statement when v20 negotiated (a v20
 server blocks without it — the same bug node-firebird fixed in 2.10.0), fb6

@@ -3,6 +3,7 @@ import { freeStatement, type PreparedStatementInfo } from '../protocol/statement
 import { executePrepared, type QueryOptions, type QueryResult, type Row } from './session.js';
 import { blobsMayProduceLazy } from './options.js';
 import { FirebirdBlobError } from './errors.js';
+import { bindNamedParams, isNamedParams, FirebirdParamError, type QueryParams } from './named-params.js';
 import type { SqlVarDesc } from '../protocol/info.js';
 import type { ParamValue } from '../protocol/msgcodec.js';
 import type { Attachment } from './attachment.js';
@@ -20,7 +21,23 @@ export class PreparedStatement {
     private readonly att: Attachment,
     private readonly info: PreparedStatementInfo,
     readonly sql: string,
+    /** `@name` markers in `?` order — empty for a positional statement. */
+    private readonly paramNames: string[] = [],
   ) {}
+
+  /**
+   * Reorder a named-params object to positional, or pass an array through.
+   * Throws if a named object is given for a statement with no `@name` markers.
+   */
+  private bind(params: QueryParams): ParamValue[] {
+    if (!isNamedParams(params)) return params;
+    if (this.paramNames.length === 0) {
+      throw new FirebirdParamError(
+        'a named-parameter object was passed but the prepared SQL has no @name markers — prepare with @name markers or pass a positional array',
+      );
+    }
+    return bindNamedParams(this.paramNames, params);
+  }
 
   /** Described input parameters. */
   get inputs(): readonly SqlVarDesc[] {
@@ -37,11 +54,12 @@ export class PreparedStatement {
   }
 
   /** Run inside an explicit transaction, or a one-shot one when omitted. */
-  async run<T = Row>(params: ParamValue[] = [], tx?: Transaction, options?: QueryOptions): Promise<QueryResult<T>> {
+  async run<T = Row>(params: QueryParams = [], tx?: Transaction, options?: QueryOptions): Promise<QueryResult<T>> {
     this.assertOpen();
+    const bound = this.bind(params);
     if (tx) {
       return this.att.withLock(() =>
-        executePrepared(this.att.session, tx.handle, this.info, params, true, {
+        executePrepared(this.att.session, tx.handle, this.info, bound, true, {
           query: options ?? {},
           txAlive: () => !tx.isFinished && this.att.isAlive,
         }),
@@ -55,7 +73,7 @@ export class PreparedStatement {
     const own = await this.att.startTransaction();
     try {
       const result = await this.att.withLock(() =>
-        executePrepared(this.att.session, own.handle, this.info, params, true, {
+        executePrepared(this.att.session, own.handle, this.info, bound, true, {
           query: options ?? {},
           txAlive: () => !own.isFinished,
         }),
@@ -74,16 +92,16 @@ export class PreparedStatement {
     }
   }
 
-  async query<T = Row>(params: ParamValue[] = [], tx?: Transaction, options?: QueryOptions): Promise<T[]> {
+  async query<T = Row>(params: QueryParams = [], tx?: Transaction, options?: QueryOptions): Promise<T[]> {
     return (await this.run<T>(params, tx, options)).rows;
   }
 
   /** First row or `undefined` (see `Attachment.queryOne`). */
-  async queryOne<T = Row>(params: ParamValue[] = [], tx?: Transaction, options?: QueryOptions): Promise<T | undefined> {
+  async queryOne<T = Row>(params: QueryParams = [], tx?: Transaction, options?: QueryOptions): Promise<T | undefined> {
     return (await this.run<T>(params, tx, options)).rows[0];
   }
 
-  async execute(params: ParamValue[] = [], tx?: Transaction, options?: QueryOptions): Promise<number> {
+  async execute(params: QueryParams = [], tx?: Transaction, options?: QueryOptions): Promise<number> {
     return (await this.run(params, tx, options)).rowsAffected;
   }
 

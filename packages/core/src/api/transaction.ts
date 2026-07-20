@@ -6,7 +6,7 @@ import {
 } from '../protocol/transaction.js';
 import { runStatement, streamRows, type QueryOptions, type QueryResult, type RunContext, type Row } from './session.js';
 import { FirebirdError } from './errors.js';
-import type { ParamValue } from '../protocol/msgcodec.js';
+import type { QueryParams } from './named-params.js';
 import type { Attachment } from './attachment.js';
 
 /** isc_read_only_trans: "attempted update during read-only transaction". */
@@ -69,7 +69,7 @@ export class Transaction {
   }
 
   /** Run a statement and return its rows (`query<T>` types them). */
-  async query<T = Row>(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<T[]> {
+  async query<T = Row>(sql: string, params: QueryParams = [], options?: QueryOptions): Promise<T[]> {
     return (await this.run<T>(sql, params, options)).rows;
   }
 
@@ -78,12 +78,12 @@ export class Transaction {
    * is empty. The whole result set is still fetched — put `FIRST 1` (or a
    * unique predicate) in the SQL when the query could match many rows.
    */
-  async queryOne<T = Row>(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<T | undefined> {
+  async queryOne<T = Row>(sql: string, params: QueryParams = [], options?: QueryOptions): Promise<T | undefined> {
     return (await this.run<T>(sql, params, options)).rows[0];
   }
 
   /** Run a statement and return rows + affected-record count. */
-  async run<T = Row>(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<QueryResult<T>> {
+  async run<T = Row>(sql: string, params: QueryParams = [], options?: QueryOptions): Promise<QueryResult<T>> {
     this.assertActive();
     const attempt = () =>
       this.att.withLock(() => runStatement(this.att.session, this.handle, sql, params, this.runContext(options)));
@@ -108,7 +108,7 @@ export class Transaction {
   }
 
   /** Run a statement, returning only the affected-record count. */
-  async execute(sql: string, params: ParamValue[] = [], options?: QueryOptions): Promise<number> {
+  async execute(sql: string, params: QueryParams = [], options?: QueryOptions): Promise<number> {
     return (await this.run(sql, params, options)).rowsAffected;
   }
 
@@ -117,7 +117,7 @@ export class Transaction {
    * the caller owns the transaction). Backpressure at batch granularity.
    * Lazy blob handles from this stream stay valid until the transaction ends.
    */
-  queryStream<T = Row>(sql: string, params: ParamValue[] = [], options?: QueryOptions): AsyncGenerator<T> {
+  queryStream<T = Row>(sql: string, params: QueryParams = [], options?: QueryOptions): AsyncGenerator<T> {
     this.assertActive();
     return streamRows(
       this.att.session,

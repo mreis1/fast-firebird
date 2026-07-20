@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/mreis1/fast-firebird/actions/workflows/ci.yml"><img src="https://github.com/mreis1/fast-firebird/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg" alt="Node >= 20">
+  <img src="https://img.shields.io/badge/node-%E2%89%A522-brightgreen.svg" alt="Node >= 22">
 </p>
 
 ```ts
@@ -48,7 +48,7 @@ modernizing at an impressive pace (TypeScript, promises, protocol 20).
 simple onboarding.
 
 fast-firebird is different by design rather than by patching: it started from
-a blank page in 2026 with a modern Node.js baseline (≥ 20), no
+a blank page in 2026 with a modern Node.js baseline (≥ 22), no
 backwards-compatibility baggage, and the wire protocol itself as the design
 center. Round trips are treated as the scarcest resource — counted, exposed
 (`Attachment.roundTrips`), and asserted exactly in the driver's own tests —
@@ -61,7 +61,7 @@ FB5/FB6 inline blobs, and ships the surrounding pieces — backpressured
 streaming, events, the Services API, a connection pool, a script parser, and a
 Drizzle ORM adapter — in one coherent package.
 
-The engineering is test-driven against real servers: **1016 core tests + 88
+The engineering is test-driven against real servers: **1085 core tests + 90
 Drizzle tests** run in CI against a real Firebird 3/4/5/6 container matrix,
 many of them asserting exact wire round-trip counts, byte-exact blob content
 (SHA-verified), and error-path connection reuse. Design trade-offs are
@@ -72,7 +72,7 @@ transaction scoping, the statement-cache metadata-pinning caveat), and the
 ## Feature overview
 
 - **Connectivity** — SRP256/Srp/Legacy_Auth, Arc4/ChaCha/ChaCha64 wire crypt, zlib wire compression, connect timeouts covering the whole handshake, FB6 `searchPath`/`owner` attach options
-- **Queries** — promise API (`query`, `queryOne`, `run`, `execute`), typed rows `query<T>()`, prepared statements, per-connection LRU statement cache, adaptive batched fetching with per-query `fetchSize`
+- **Queries** — promise API (`query`, `queryOne`, `run`, `execute`), positional `?` or named `@name` parameters, typed rows `query<T>()`, prepared statements, per-connection LRU statement cache, adaptive batched fetching with per-query `fetchSize`
 - **Result shaping** — `ColumnInfo` metadata, `rowMode: 'array'`, `exclude`/`only` column filters, `expandStar` (`select *` rewritten to explicit columns before prepare)
 - **Streaming** — `queryStream` async iterator with batch-level backpressure
 - **Blobs** — eager or lazy (per subtype, per column), 64KB segments with cross-blob pipelining, partial reads (`head()`) with resume, streaming reads/writes, read-ahead for streams, batch prefetch, `toFile()`, FB5/FB6 inline blobs (small blobs cost zero round trips)
@@ -97,6 +97,33 @@ typed[0].NAME; // string
 
 `queryOne` returns the first row or `undefined` — the full result set is still
 fetched, so add `FIRST 1` (or a unique predicate) when many rows could match.
+
+### Named parameters (`@name`)
+
+Pass an **object** instead of an array and mark placeholders with `@name`. The
+driver rewrites `@name` to positional `?` and reorders the values client-side —
+so the object key order is irrelevant, and a name repeated in the SQL is bound
+in every slot it appears:
+
+```ts
+const rows = await db.query(
+  'select * from emp where dept = @dept and sal > @min',
+  { dept: 10, min: 5000 },
+);
+
+// Works everywhere params do — execute, streams, prepared statements, the pool:
+await db.execute('update emp set name = @name where id = @id', { name: 'Ann', id: 1 });
+
+const stmt = await db.prepare('select * from emp where dept = @dept');
+await stmt.query({ dept: 10 });   // re-run with different objects
+```
+
+We use `@` rather than `:name` on purpose: a leading colon (`:var`) is a
+**PSQL local-variable reference** in Firebird — `@name` has no meaning anywhere
+in the SQL/PSQL grammar, so it's unambiguous even inside an `EXECUTE BLOCK`
+body. Markers inside string literals, quoted identifiers, `q'{…}'` literals and
+comments are left untouched. Positional `?` + array params keep working
+unchanged; mixing a named object with `?`-only SQL throws a `FirebirdParamError`.
 
 ### Column metadata & array rows
 
@@ -652,7 +679,7 @@ stream + read-ahead when they don't.
   `FirebirdError`.
 - **Charset layer resolved at prepare time**: zero per-cell branching; UTF8 and
   latin1 use native Buffer fast paths, everything else iconv-lite.
-- **Tested against real servers**: 1016 core + 88 Drizzle tests across a
+- **Tested against real servers**: 1085 core + 90 Drizzle tests across a
   Firebird 3/4/5/6-snapshot (+ Legacy_Auth) Docker matrix, in CI on every
   push — the same compose file as local development, so the environments
   cannot drift.

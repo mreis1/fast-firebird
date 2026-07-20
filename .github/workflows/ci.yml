@@ -45,7 +45,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24 # active LTS; local dev runs 22 (the engines floor)
           cache: pnpm
 
       - name: Install

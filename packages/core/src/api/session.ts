@@ -19,6 +19,7 @@ import { BlobPrefetcher } from './blob-prefetch.js';
 import { InlineBlobCache } from './inline-cache.js';
 import { Blob, type BlobScope } from './blob.js';
 import { FirebirdError } from './errors.js';
+import { normalizeParams, type QueryParams } from './named-params.js';
 import type { SqlVarDesc } from '../protocol/info.js';
 import type { WireConnection } from '../protocol/wire.js';
 import { resolveReadAhead, type BlobMode, type BlobReadAheadOption, type BlobsOption, type ResolvedOptions, type ResolvedReadAhead } from './options.js';
@@ -543,9 +544,11 @@ export async function runStatement(
   ctx: SessionContext,
   txHandle: number,
   sql: string,
-  params: ParamValue[],
+  rawParams: QueryParams,
   run: RunContext = EMPTY_RUN,
 ): Promise<QueryResult> {
+  let params: ParamValue[];
+  ({ sql, params } = normalizeParams(sql, rawParams));
   sql = await resolveExpandStar(ctx, txHandle, sql, run);
   const cached = ctx.cache?.get(sql);
   if (cached) {
@@ -596,10 +599,12 @@ export async function* streamRows(
   ctx: SessionContext,
   txHandle: number,
   sql: string,
-  params: ParamValue[],
+  rawParams: QueryParams,
   lock: OpLock,
   run: RunContext = EMPTY_RUN,
 ): AsyncGenerator<Row> {
+  let params: ParamValue[];
+  ({ sql, params } = normalizeParams(sql, rawParams));
   if (run.query.expandStar) sql = await lock(() => resolveExpandStar(ctx, txHandle, sql, run));
   const cached = ctx.cache?.get(sql);
   let info: PreparedStatementInfo | null = cached ?? null;
