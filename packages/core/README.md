@@ -30,6 +30,9 @@ await db.disconnect();
 - **Positional or named parameters** — `?` with an array, or `@name` with an
   object (`{ id: 1 }`); `@name` is conflict-free even inside PSQL bodies where
   `:var` is a local variable. Rewritten to positional `?` client-side.
+- **Bulk writes** — `executeBatch` on the Firebird 4+ wire batch API:
+  thousands of DML rows per round trip, streaming row sources, per-row update
+  counts and errors, BLOB support.
 - **Blobs done right** — eager by default (a `SELECT` gives you values), 64KB
   segments with deep pipelining, FB5 inline blobs (small blobs cost **zero**
   extra round trips), lazy modes per column/subtype, `blob.stream()`,
@@ -50,7 +53,7 @@ await db.disconnect();
   backup/restore).
 - **Real error messages** — the full gds→message table (2539 entries) with
   SQLSTATE and complete status vector on every `FirebirdError`.
-- **Tested against real servers** — 1085 tests across a Firebird 3/4/5/6
+- **Tested against real servers** — 1158 tests across a Firebird 3/4/5/6
   (+ Legacy_Auth) Docker matrix on every push.
 
 ## Drizzle ORM

@@ -4,6 +4,7 @@ import { executePrepared, type QueryOptions, type QueryResult, type Row } from '
 import { blobsMayProduceLazy } from './options.js';
 import { FirebirdBlobError } from './errors.js';
 import { bindNamedParams, isNamedParams, FirebirdParamError, type QueryParams } from './named-params.js';
+import { executeBatchPrepared, type BatchOptions, type BatchResult, type BatchRows } from './batch.js';
 import type { SqlVarDesc } from '../protocol/info.js';
 import type { ParamValue } from '../protocol/msgcodec.js';
 import type { Attachment } from './attachment.js';
@@ -103,6 +104,38 @@ export class PreparedStatement {
 
   async execute(params: QueryParams = [], tx?: Transaction, options?: QueryOptions): Promise<number> {
     return (await this.run(params, tx, options)).rowsAffected;
+  }
+
+  /**
+   * Bulk-run this statement against many parameter rows via the wire batch
+   * API (Firebird 4+) — in the given transaction, or a one-shot one. Repeat
+   * calls reuse the prepared handle: zero prepare cost per batch. See
+   * `Attachment.executeBatch`.
+   */
+  async executeBatch(rows: BatchRows, tx?: Transaction, options?: BatchOptions): Promise<BatchResult> {
+    this.assertOpen();
+    if (tx) {
+      return this.att.withLock(() =>
+        executeBatchPrepared(this.att.session, tx.handle, this.info, rows, this.paramNames, options),
+      );
+    }
+    const own = await this.att.startTransaction();
+    try {
+      const result = await this.att.withLock(() =>
+        executeBatchPrepared(this.att.session, own.handle, this.info, rows, this.paramNames, options),
+      );
+      await own.commit();
+      return result;
+    } catch (err) {
+      if (!own.isFinished) {
+        try {
+          await own.rollback();
+        } catch {
+          /* surface the original error */
+        }
+      }
+      throw err;
+    }
   }
 
   /** `await using stmt = await db.prepare(…)` → closes at scope exit. */

@@ -171,7 +171,7 @@ export async function readRow(wire: WireConnection, readers: ColumnReader[]): Pr
 
 // ── BLR builders ───────────────────────────────────────────────────────────
 
-class BlrBuilder {
+export class BlrBuilder {
   readonly bytes: number[] = [];
 
   byte(b: number): this {
@@ -185,17 +185,17 @@ class BlrBuilder {
   }
 }
 
-function blrHeader(b: BlrBuilder, fieldCount: number): void {
+export function blrHeader(b: BlrBuilder, fieldCount: number): void {
   b.byte(Blr.version5).byte(Blr.begin).byte(Blr.message).byte(0).word(fieldCount * 2);
 }
 
-function blrFooter(b: BlrBuilder): Buffer {
+export function blrFooter(b: BlrBuilder): Buffer {
   b.byte(Blr.end).byte(Blr.eoc);
   return Buffer.from(b.bytes);
 }
 
 /** Null-indicator slot that follows every field in a message BLR. */
-function nullSlot(b: BlrBuilder): void {
+export function nullSlot(b: BlrBuilder): void {
   b.byte(Blr.short).byte(0);
 }
 

@@ -61,7 +61,7 @@ FB5/FB6 inline blobs, and ships the surrounding pieces — backpressured
 streaming, events, the Services API, a connection pool, a script parser, and a
 Drizzle ORM adapter — in one coherent package.
 
-The engineering is test-driven against real servers: **1085 core tests + 90
+The engineering is test-driven against real servers: **1158 core tests + 90
 Drizzle tests** run in CI against a real Firebird 3/4/5/6 container matrix,
 many of them asserting exact wire round-trip counts, byte-exact blob content
 (SHA-verified), and error-path connection reuse. Design trade-offs are
@@ -73,6 +73,7 @@ transaction scoping, the statement-cache metadata-pinning caveat), and the
 
 - **Connectivity** — SRP256/Srp/Legacy_Auth, Arc4/ChaCha/ChaCha64 wire crypt, zlib wire compression, connect timeouts covering the whole handshake, FB6 `searchPath`/`owner` attach options
 - **Queries** — promise API (`query`, `queryOne`, `run`, `execute`), positional `?` or named `@name` parameters, typed rows `query<T>()`, prepared statements, per-connection LRU statement cache, adaptive batched fetching with per-query `fetchSize`
+- **Bulk writes** — `executeBatch` on the FB4+ wire batch API: thousands of DML rows per round trip, streaming (async-iterable) row sources, per-row update counts and errors (`continueOnError`), BLOB support
 - **Result shaping** — `ColumnInfo` metadata, `rowMode: 'array'`, `exclude`/`only` column filters, `expandStar` (`select *` rewritten to explicit columns before prepare)
 - **Streaming** — `queryStream` async iterator with batch-level backpressure
 - **Blobs** — eager or lazy (per subtype, per column), 64KB segments with cross-blob pipelining, partial reads (`head()`) with resume, streaming reads/writes, read-ahead for streams, batch prefetch, `toFile()`, FB5/FB6 inline blobs (small blobs cost zero round trips)
@@ -149,6 +150,52 @@ in the SQL/PSQL grammar, so it's unambiguous even inside an `EXECUTE BLOCK`
 body. Markers inside string literals, quoted identifiers, `q'{…}'` literals and
 comments are left untouched. Positional `?` + array params keep working
 unchanged; mixing a named object with `?`-only SQL throws a `FirebirdParamError`.
+
+### Bulk writes: `executeBatch` (Firebird 4+)
+
+Inserting rows one `execute()` at a time costs one round trip **per row** — on
+a real network that dominates everything else. `executeBatch` uses Firebird's
+wire batch API (`op_batch_create/msg/exec`, protocol ≥ 16): all rows travel to
+the server together and execute in **one round trip** per ~8 MiB of data.
+
+```ts
+const r = await db.executeBatch(
+  'insert into orders (id, customer, total) values (?, ?, ?)',
+  [
+    [1, 'ACME', '99.90'],
+    [2, 'Globex', '15.00'],
+    [3, 'Initech', '7.50'],
+  ],
+);
+r.rowsAffected;  // 3
+r.updateCounts;  // [1, 1, 1] — per-row affected counts
+```
+
+Rows are positional arrays or `@name` objects, from an array **or any
+(async) iterable** — stream a million rows from a file without holding them in
+memory; the driver flushes a wire cycle every ~8 MiB. Works with every
+parameter type including BLOBs (uploaded and registered with the batch) and
+exact NUMERIC/DECIMAL scaling from strings.
+
+```ts
+// UPDATE/DELETE batches get real per-row counts:
+const u = await db.executeBatch('update stock set qty = @qty where sku = @sku', updates);
+
+// Default: the first failed row throws FirebirdBatchError (.index tells you
+// which) and nothing commits. Opt into per-row error reporting instead:
+const r2 = await db.executeBatch(sql, rows, { continueOnError: true });
+r2.errors;  // [{ index, error }] — successful rows are committed
+
+// Available on transactions (caller owns the commit), the pool, and prepared
+// statements (repeat batches skip the prepare round trip entirely):
+await tx.executeBatch(sql, rows);
+const stmt = await db.prepare(sql);
+await stmt.executeBatch(rowsA);
+await stmt.executeBatch(rowsB);
+```
+
+On Firebird 3 (protocol 13) the call fails fast with a clear error — loop a
+prepared statement there instead.
 
 ### Column metadata & array rows
 
@@ -704,7 +751,7 @@ stream + read-ahead when they don't.
   `FirebirdError`.
 - **Charset layer resolved at prepare time**: zero per-cell branching; UTF8 and
   latin1 use native Buffer fast paths, everything else iconv-lite.
-- **Tested against real servers**: 1085 core + 90 Drizzle tests across a
+- **Tested against real servers**: 1158 core + 90 Drizzle tests across a
   Firebird 3/4/5/6-snapshot (+ Legacy_Auth) Docker matrix, in CI on every
   push — the same compose file as local development, so the environments
   cannot drift.

@@ -6,6 +6,7 @@ import {
 } from '../protocol/transaction.js';
 import { runStatement, streamRows, type QueryOptions, type QueryResult, type RunContext, type Row } from './session.js';
 import { FirebirdError } from './errors.js';
+import { executeBatchStatement, type BatchOptions, type BatchResult, type BatchRows } from './batch.js';
 import type { QueryParams } from './named-params.js';
 import type { Attachment } from './attachment.js';
 
@@ -110,6 +111,16 @@ export class Transaction {
   /** Run a statement, returning only the affected-record count. */
   async execute(sql: string, params: QueryParams = [], options?: QueryOptions): Promise<number> {
     return (await this.run(sql, params, options)).rowsAffected;
+  }
+
+  /**
+   * Bulk-run one DML statement against many parameter rows inside THIS
+   * transaction via the wire batch API (Firebird 4+). Nothing commits here —
+   * the caller owns the transaction. See `Attachment.executeBatch`.
+   */
+  async executeBatch(sql: string, rows: BatchRows, options?: BatchOptions): Promise<BatchResult> {
+    this.assertActive();
+    return this.att.withLock(() => executeBatchStatement(this.att.session, this.handle, sql, rows, options));
   }
 
   /**

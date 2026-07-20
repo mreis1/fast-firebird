@@ -288,12 +288,20 @@ only when API surface stabilizes (avoid premature package fragmentation).
    v0.1.0 (typecheck is 1.5 s; the risk sits in tsup's d.ts generation via
    the TS compiler API, exactly what the TS7 native rewrite replaced).
    Path: 5.9 → 6.x bridge once stable → 7 when tsup/vitest declare support.
-17. Wire batch API (op_batch_create/op_batch_msg/op_batch_exec, FB4+/P16+)
-   — bulk insert of many rows in one round trip, the biggest remaining RT
-   win for write-heavy workloads. node-firebird shipped `batchStream` with
-   backpressure in 2.13.0; ours should be the same shape as queryStream
-   (stream in, adaptive flush). Blob-in-batch (op_batch_blob_stream) can
-   come later.
+~~17. Wire batch API~~ — SHIPPED 2026-07-20 (plans/batch.md):
+   `executeBatch(sql, rows, opts)` on Attachment/Transaction/Pool/
+   PreparedStatement — op_batch_create/msg/exec, FB4+/P16+, create+msgs+exec
+   in ONE flush (300 cached-stmt rows = 3 RTs incl. tx start/commit,
+   asserted). Fixed-format BLR from described inputs (text→varying,
+   date/time→timestamp, exact string-decimal scaling); msglen per engine
+   layout rules — TZ types use PADDED struct sizes (12/8, found empirically);
+   blobs need blr_blob2 (quad hides them from DsqlBatch's format scan) +
+   upload/op_batch_regblob. Per-row update counts + status vectors from
+   op_batch_cs; `continueOnError` (MULTIERROR) or throw FirebirdBatchError
+   with row index; ~8 MiB auto-chunking (server buffer is 16 MiB);
+   (async-)iterable row sources. FB3 fails fast with a clear error.
+   21 unit + 52 integration tests. Follow-up (demand-driven):
+   op_batch_blob_stream inline blob transport (regblob costs 1 RT per blob).
 18. Multi-host pool (primary/replica cluster with failover) — node-firebird
    2.14.0 shipped a mysql2-style PoolCluster. Demand-driven; our Pool
    already has validation-on-borrow, so the cluster layer is routing +
@@ -314,7 +322,18 @@ only when API surface stabilizes (avoid premature package fragmentation).
   breakage (see backlog #15).
 - Regression: `CHARSET NONE` + win1252 round-trips (€, smart quotes, em dash).
 
-## Current status (2026-07-20)
+## Current status (2026-07-20, session 44)
+Wire batch API shipped (backlog #17, plans/batch.md): `executeBatch` on
+Attachment/Transaction/Pool/PreparedStatement — op_batch_create/msg/exec on
+FB4+/P16+, fixed-format BLR from described inputs, exact string-decimal
+scaling, blob upload + regblob (blr_blob2 required), per-row counts/errors
+from op_batch_cs, `continueOnError`, ~8 MiB chunk cycles, (async-)iterable
+row sources. 300 cached-stmt rows = 3 RTs including tx start/commit
+(asserted). Traps: TZ msglen uses padded struct sizes (12/8); blr_quad hides
+blobs from the format scan. 21 unit + 52 integration tests → **1158 core +
+90 drizzle** green on FB3/4/5/6.
+
+## Status 2026-07-20 (session 43)
 Named parameters shipped: `@name` markers + an object of values, rewritten
 client-side to positional `?` and reordered (`packages/core/src/api/
 named-params.ts`). `@` chosen over `:name` because a leading colon is a PSQL

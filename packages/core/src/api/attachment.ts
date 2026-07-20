@@ -22,6 +22,7 @@ import { Op } from '../protocol/constants.js';
 import { executeScript, type ExecuteScriptOptions, type ScriptExecutionResult } from '../script/execute.js';
 import { EventChannel, type EventListener } from '../events/events.js';
 import { rewriteNamedParams, type QueryParams } from './named-params.js';
+import { executeBatchStatement, type BatchOptions, type BatchResult, type BatchRows } from './batch.js';
 
 export type ConnectInput = FirebirdConnectionOptions & LegacyOptionAliases;
 
@@ -231,6 +232,41 @@ export class Attachment {
   /** Run a single statement in its own transaction; returns affected count. */
   async execute(sql: string, params: QueryParams = [], options?: QueryOptions): Promise<number> {
     return (await this.run(sql, params, options)).rowsAffected;
+  }
+
+  /**
+   * Run one DML statement against MANY parameter rows in bulk via the wire
+   * batch API (Firebird 4+): all rows travel to the server in one round trip
+   * per ~8 MiB cycle, instead of one per row. Runs in its own transaction —
+   * committed on success (with `continueOnError`, the successful rows).
+   *
+   * Rows are positional arrays or `@name` objects; the connection must not
+   * be used for other statements while an async `rows` source is consumed.
+   *
+   * ```ts
+   * const r = await db.executeBatch(
+   *   'insert into orders (id, total) values (?, ?)',
+   *   [[1, '9.99'], [2, '15.00'], [3, '7.50']],
+   * );
+   * r.rowsAffected; // 3
+   * ```
+   */
+  async executeBatch(sql: string, rows: BatchRows, options?: BatchOptions): Promise<BatchResult> {
+    const tx = await this.startTransaction();
+    try {
+      const result = await this.withLock(() => executeBatchStatement(this.session, tx.handle, sql, rows, options));
+      await tx.commit();
+      return result;
+    } catch (err) {
+      if (!tx.isFinished) {
+        try {
+          await tx.rollback();
+        } catch {
+          /* surface the original error */
+        }
+      }
+      throw err;
+    }
   }
 
   /**

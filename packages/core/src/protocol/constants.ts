@@ -74,6 +74,8 @@ export const enum Op {
   batch_regblob = 104,
   batch_blob_stream = 105,
   batch_set_bpb = 106,
+  batch_cancel = 109, // p17+
+  batch_sync = 110, // p17+
   fetch_scroll = 112,
   info_cursor = 113,
   inline_blob = 114,
@@ -368,6 +370,28 @@ export const enum Info {
 }
 
 export const SERVICE_MGR = 'service_mgr';
+
+// ── Batch API (FB4+/protocol 16; IBatch in FirebirdInterface.idl) ──────────
+/** Batch parameter buffer: WideTagged clumplets (tag byte + LE uint32 len). */
+export const enum BatchPb {
+  version1 = 1,
+  tag_multierror = 1,
+  tag_record_counts = 2,
+  tag_buffer_bytes_size = 3,
+  tag_blob_policy = 4,
+  tag_detailed_errors = 5,
+}
+
+export const enum BatchBlobPolicy {
+  none = 0,
+  id_engine = 1,
+  id_user = 2,
+  stream = 3,
+}
+
+/** IBatchCompletionState update-count sentinels. */
+export const BATCH_EXECUTE_FAILED = -1;
+export const BATCH_SUCCESS_NO_INFO = -2;
 
 // ── Events ─────────────────────────────────────────────────────────────────
 export const EPB_VERSION1 = 1;

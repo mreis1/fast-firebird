@@ -22,6 +22,14 @@ export {
   type QueryParams,
   type RewrittenSql,
 } from './api/named-params.js';
+export {
+  FirebirdBatchError,
+  type BatchOptions,
+  type BatchResult,
+  type BatchRow,
+  type BatchRowError,
+  type BatchRows,
+} from './api/batch.js';
 export type { FirebirdConnectionOptions, LegacyOptionAliases, WireCryptOption, BlobMode, BlobColumnModes, BlobsOption, BlobReadAheadOption } from './api/options.js';
 export {
   FirebirdError,

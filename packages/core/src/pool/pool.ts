@@ -3,6 +3,7 @@ import type { Transaction } from '../api/transaction.js';
 import type { TransactionOptions } from '../protocol/transaction.js';
 import type { QueryResult, Row } from '../api/session.js';
 import type { QueryParams } from '../api/named-params.js';
+import type { BatchOptions, BatchResult, BatchRows } from '../api/batch.js';
 
 export interface PoolOptions extends ConnectInput {
   /** Connections kept warm even when idle. Default 0. */
@@ -252,6 +253,11 @@ export class Pool {
 
   execute(sql: string, params: QueryParams = []): Promise<number> {
     return this.use((c) => c.execute(sql, params));
+  }
+
+  /** Bulk DML via the wire batch API on a borrowed connection (see `Attachment.executeBatch`). */
+  executeBatch(sql: string, rows: BatchRows, options?: BatchOptions): Promise<BatchResult> {
+    return this.use((c) => c.executeBatch(sql, rows, options));
   }
 
   transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T> {

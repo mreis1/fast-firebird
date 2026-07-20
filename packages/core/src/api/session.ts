@@ -442,7 +442,7 @@ function isBlobStreamSource(v: unknown): v is AsyncIterable<Buffer | string> {
 }
 
 /** Validate arity, upload blob params, and build the text encoder. */
-async function prepareParams(
+export async function prepareParams(
   ctx: SessionContext,
   txHandle: number,
   info: PreparedStatementInfo,
@@ -574,7 +574,7 @@ export async function runStatement(
 }
 
 /** Post-success statement lifecycle: cache it, or drop it lazily. */
-function finishStatement(ctx: SessionContext, sql: string, info: PreparedStatementInfo): void {
+export function finishStatement(ctx: SessionContext, sql: string, info: PreparedStatementInfo): void {
   const stmtType = info.description.stmtType;
   if (stmtType === StmtType.ddl) {
     // Schema may have changed under every cached statement and star rewrite.
