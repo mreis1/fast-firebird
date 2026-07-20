@@ -82,14 +82,34 @@ transaction scoping, the statement-cache metadata-pinning caveat), and the
 
 ## Queries
 
-### Rows, first-row, typed rows
+### `run` and its shortcuts (`query`, `queryOne`, `execute`)
+
+There is **one** execution primitive — `run()` — that works for any statement
+(SELECT, INSERT/UPDATE/DELETE, DDL) and returns everything the server reported:
 
 ```ts
-const rows = await db.query('select id, name from users');            // Row[]
-const user = await db.queryOne('select * from users where id = ?', [7]); // Row | undefined
-const { rows: r, rowsAffected, columns } = await db.run('update t set x = 1');
+const { rows, rowsAffected, columns } = await db.run('update t set x = 1 where y = ?', [2]);
+```
 
-// Compile-time row typing (no runtime validation):
+`query`, `queryOne`, and `execute` are thin, typed shortcuts over `run()` — they
+run the exact same call and just project the field you asked for, with a return
+type to match. Reach for the shortcut that fits; drop to `run()` when you want
+more than one field back:
+
+```ts
+// Each is `async` — await it; the arrow shows what it resolves to.
+db.run(sql, p)       // → { rows, rowsAffected, columns }   (the primitive)
+db.query(sql, p)     // → run().rows            : Row[]
+db.queryOne(sql, p)  // → run().rows[0]         : Row | undefined
+db.execute(sql, p)   // → run().rowsAffected    : number
+```
+
+```ts
+const rows = await db.query('select id, name from users');               // Row[]
+const user = await db.queryOne('select * from users where id = ?', [7]); // Row | undefined
+const n    = await db.execute('delete from log where created < ?', [cutoff]); // number
+
+// Compile-time row typing (no runtime validation) flows through the shortcut:
 interface User { ID: number; NAME: string }
 const typed = await db.query<User>('select id, name from users');
 typed[0].NAME; // string
@@ -97,6 +117,11 @@ typed[0].NAME; // string
 
 `queryOne` returns the first row or `undefined` — the full result set is still
 fetched, so add `FIRST 1` (or a unique predicate) when many rows could match.
+`execute` ignores any rows a statement produces, so use it for writes/DDL where
+you only care about the affected count. All four take the same
+`(sql, params, options)` shape and the same positional-or-named parameters
+(below). The pool exposes the same `query`/`queryOne`/`run`/`execute` set, each
+acquiring a connection for the single call.
 
 ### Named parameters (`@name`)
 
