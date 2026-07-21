@@ -3,7 +3,7 @@ import { serializeCell } from './engines.ts';
 
 export interface Feature {
   id: string;
-  since: 3 | 4 | 5;
+  since: 3 | 4 | 5 | 6;
   title: string;
   blurb: string;
   /** Statements run (auto-commit) before the demo query. */
@@ -15,7 +15,7 @@ export interface Feature {
 /**
  * Firebird features grouped by the version that introduced them. Each demo is a
  * single result-returning statement (with optional setup DDL/DML), so it runs on
- * a fresh connection and shows a row. Verified against FB3/4/5.
+ * a fresh connection and shows a row. Verified against FB3/4/5/6.
  */
 export const FEATURES: Feature[] = [
   // ── Firebird 3 ────────────────────────────────────────────────────────────
@@ -127,6 +127,47 @@ on t.id = s.id
 when matched then update set v = s.v
 when not matched then insert (id, v) values (s.id, s.v)
 returning t.id, t.v`,
+  },
+
+  // ── Firebird 6 (snapshot) ─────────────────────────────────────────────────
+  {
+    id: 'schemas',
+    since: 6,
+    title: 'SQL schemas',
+    blurb:
+      'Real CREATE SCHEMA namespaces inside one database — qualified names, CURRENT_SCHEMA, ' +
+      'a search path. The end of prefix_naming_conventions.',
+    setup: [
+      `create schema if not exists ff_feat_schema`,
+      `recreate table ff_feat_schema.parts (id integer primary key, name varchar(20))`,
+      `insert into ff_feat_schema.parts values (1, 'rotor')`,
+      `insert into ff_feat_schema.parts values (2, 'stator')`,
+    ],
+    sql: `select current_schema as cur_schema, p.id, p.name from ff_feat_schema.parts p order by p.id`,
+  },
+  {
+    id: 'format-cast',
+    since: 6,
+    title: 'CAST ... FORMAT',
+    blurb: 'Format and parse datetimes with Oracle-style masks right in SQL — no lpad/extract gymnastics.',
+    sql: `select cast(timestamp '2024-06-15 14:30' as varchar(40) format 'DY, DD "of" MONTH YYYY, HH12:MI P.M.') as formatted,
+       cast('15/06/2024' as date format 'DD/MM/YYYY') as parsed
+from rdb$database`,
+  },
+  {
+    id: 'greatest-least',
+    since: 6,
+    title: 'GREATEST / LEAST / BTRIM',
+    blurb: 'Row-wise min/max across arguments and trim-any-character — small standard functions, long overdue.',
+    sql: `select greatest(10, 42, 7) as greatest_val, least(10, 42, 7) as least_val, btrim('--hello--', '-') as btrimmed from rdb$database`,
+  },
+  {
+    id: 'any-value',
+    since: 6,
+    title: 'ANY_VALUE aggregate',
+    blurb: 'Pick an arbitrary representative per group — satisfy GROUP BY without dragging every column into it.',
+    sql: `select rdb$relation_id / 10 as bucket, any_value(rdb$relation_name) as example_rel, count(*) as n
+from rdb$relations where rdb$system_flag = 1 group by 1 order by 1 rows 4`,
   },
 ];
 

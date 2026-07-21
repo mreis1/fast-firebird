@@ -14,3 +14,8 @@ docker/data/
 # Editor swap files & private local notes
 *.swp
 MARCIO_NOTES.md
+
+# Docs site — generated output (docs/api is emitted by TypeDoc at build time)
+docs/.vitepress/dist/
+docs/.vitepress/cache/
+docs/api/

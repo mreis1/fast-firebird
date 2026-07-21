@@ -63,7 +63,10 @@ for the Drizzle dialect (query builder, migrator, schema introspection).
 
 ## Documentation
 
-Full documentation, benchmarks, and design notes:
+Guides, the node-firebird migration guide, and the full API reference:
+**[mreis1.github.io/fast-firebird](https://mreis1.github.io/fast-firebird/)**
+
+Source, benchmarks, and design notes:
 **[github.com/mreis1/fast-firebird](https://github.com/mreis1/fast-firebird)**
 
 ## License

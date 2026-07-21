@@ -46,6 +46,10 @@ one-time novelty spike. Land these first:
    a real API reference (TypeDoc from the d.ts), task-oriented guides, and
    credibility. This is table stakes for "reference." *Highest-leverage
    non-feature item.*
+   **Status: BUILT 2026-07-21** (`docs/`, VitePress + TypeDoc, 19 guide pages,
+   `.github/workflows/docs.yml` → GitHub Pages at
+   https://mreis1.github.io/fast-firebird/). Goes live on push + enabling
+   Pages (Source: GitHub Actions) in repo settings.
 2. **node-firebird migration guide (public).** The single biggest adoption
    lever — the install base is on node-firebird. A side-by-side "here's your
    code, here's the fast-firebird version" page. We already have the internal
@@ -53,6 +57,9 @@ one-time novelty spike. Land these first:
    a guide. Decide separately whether to ship a thin **compat shim** package
    (`node-firebird`-shaped API over core) — powerful but a maintenance
    commitment; the guide comes first, the shim only if demand appears.
+   **Status: guide BUILT 2026-07-21** (docs site,
+   `guide/migrate-from-node-firebird`). Shim still demand-driven. The
+   `examples/` directory (item 4) remains open.
 3. **Reproducible benchmark repo/page.** The perf story (21–152× blobs, RT
    counts) is our strongest evidence but currently lives in plans/. Publish it:
    a runnable repo, methodology stated, "defaults vs defaults vs

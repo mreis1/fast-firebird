@@ -1,0 +1,76 @@
+# Build the VitePress docs site (docs/) + TypeDoc API reference and publish
+# to GitHub Pages at https://mreis1.github.io/fast-firebird/.
+# Requires Pages to be enabled with "Source: GitHub Actions" in repo settings.
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'packages/core/src/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: docs-deploy
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same stub as ci.yml: apps/demo declares a file: dependency into the
+      # gitignored references/ clone; pnpm must resolve the workspace graph.
+      - name: Stub gitignored file dependency (node-firebird-2-ext)
+        run: |
+          mkdir -p references/node-firebird2-ext
+          cat > references/node-firebird2-ext/package.json <<'EOF'
+          {
+            "name": "node-firebird-2-ext",
+            "version": "1.0.0",
+            "main": "dist/index.js",
+            "dependencies": {
+              "@fast-firebird/core": "file:../../packages/core",
+              "generic-pool": "^3.9.0",
+              "iconv-lite": "^0.7.0",
+              "moment": "^2.30.1",
+              "rxjs": "^7.8.2"
+            }
+          }
+          EOF
+
+      - uses: pnpm/action-setup@v4 # version comes from package.json "packageManager"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build docs (TypeDoc + VitePress)
+        run: pnpm --filter @fast-firebird/docs build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/.vitepress/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

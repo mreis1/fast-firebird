@@ -322,7 +322,27 @@ only when API surface stabilizes (avoid premature package fragmentation).
   breakage (see backlog #15).
 - Regression: `CHARSET NONE` + win1252 round-trips (€, smart quotes, em dash).
 
-## Current status (2026-07-20, session 44)
+## Current status (2026-07-21, session 45)
+Docs site + FB6 demo. `docs/` is a VitePress workspace package deployed to
+GitHub Pages via `.github/workflows/docs.yml` (upload-pages-artifact →
+deploy-pages; requires Pages source = "GitHub Actions" in repo settings).
+19 guide pages (README content split per topic + a new public
+node-firebird → fast-firebird migration guide with side-by-side code groups
+and an isolation/feature map) + TypeDoc API reference
+(typedoc-plugin-markdown + typedoc-vitepress-theme, generated from
+core/src/index.ts into gitignored docs/api/ at build time; config falls back
+to an empty API sidebar when absent). Base `/fast-firebird/`; local search.
+Doc-accuracy fix found while writing: scaled NUMERIC/DECIMAL decodes to JS
+*number* (lossy > 2^53, msgcodec applyScale), not string — types page
+documents `int64As` and points exact-money at DECFLOAT/varchar casts.
+Demo dashboard: fb6 (port 30507) added to DEFAULT_SERVERS + 4 FB6 feature
+explorer entries (schemas, CAST…FORMAT, GREATEST/LEAST/BTRIM, ANY_VALUE) —
+each verified FB6-pass/FB5-fail against the live containers before adding;
+`current_schema` is reserved (aliased `cur_schema`), AM/PM format token is
+`P.M.`. All three lanes (core/drizzle/compat) verified against FB6 via the
+demo API.
+
+## Status 2026-07-20 (session 44)
 Wire batch API shipped (backlog #17, plans/batch.md): `executeBatch` on
 Attachment/Transaction/Pool/PreparedStatement — op_batch_create/msg/exec on
 FB4+/P16+, fixed-format BLR from described inputs, exact string-decimal

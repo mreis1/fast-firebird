@@ -1,6 +1,6 @@
 # @fast-firebird/demo
 
-A live dashboard that drives Firebird 3/4/5 through the whole stack on one screen:
+A live dashboard that drives Firebird 3/4/5/6 through the whole stack on one screen:
 `@fast-firebird/core`, `@fast-firebird/drizzle`, and the `node-firebird2-ext`
 compat backend — the same query, three faces.
 
@@ -11,7 +11,7 @@ compat backend — the same query, three faces.
 - **Connection** — protocol version, wire encryption (Arc4/ChaCha), compression, engine + server version (Services API).
 - **Connection pool (live)** — acquire/idle/in-use/waiting, streamed over SSE with a sparkline.
 - **SQL runner — three stacks** — run one query and time it through raw **core**, **Drizzle** (`db.execute(sql.raw(...))`), and the **node-firebird2-ext** compat facade, side by side.
-- **Feature explorer** — a version-aware catalog of what each Firebird release unlocks (FB3: BOOLEAN, window functions, IDENTITY; FB4: DECFLOAT, INT128, TIME ZONE, crypto hashes; FB5: multi-row RETURNING, SKIP LOCKED, MERGE … RETURNING). Each has runnable SQL; features above the selected server's version are shown but locked.
+- **Feature explorer** — a version-aware catalog of what each Firebird release unlocks (FB3: BOOLEAN, window functions, IDENTITY; FB4: DECFLOAT, INT128, TIME ZONE, crypto hashes; FB5: multi-row RETURNING, SKIP LOCKED, MERGE … RETURNING; FB6: SQL schemas, CAST … FORMAT, GREATEST/LEAST/BTRIM, ANY_VALUE). Each has runnable SQL; features above the selected server's version are shown but locked.
 - **Events (live)** — arm Firebird `POST_EVENT` names and fire them; events stream back over SSE.
 - **Row streaming** — a lazy, backpressured `queryStream` of N generated rows with live progress.
 - **Blobs** — write + read back a text blob (`café €`) and a binary blob.
@@ -34,7 +34,7 @@ compat backend — the same query, three faces.
 
 ## Run it
 
-Requires the fast-firebird docker test matrix (FB3/4/5 on ports 30503/4/5) — the
+Requires the fast-firebird docker test matrix (FB3/4/5/6 on ports 30503/4/5/7) — the
 same containers the core test-suite uses — and the `node-firebird2-ext` clone in
 `references/` (for the compat lane).
 
@@ -57,7 +57,7 @@ pnpm --filter @fast-firebird/demo start
 The dashboard creates an isolated `ff_demo.fdb` per server on first use, so it
 never touches the test fixtures. Use **+ add server** to point it at any other
 database (read/write, wide open); custom servers can be removed with the ✕ on
-their tab (built-in FB3/4/5 are protected).
+their tab (built-in FB3/4/5/6 are protected).
 
 ## Layout
 

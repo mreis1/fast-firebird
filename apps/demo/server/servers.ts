@@ -50,6 +50,7 @@ const DEFAULT_SERVERS: ServerConfig[] = [
   { id: 'fb3', label: 'Firebird 3', host: '127.0.0.1', port: 30503, database: DEMO_DB, user: 'SYSDBA', password: 'masterkey', version: 3 },
   { id: 'fb4', label: 'Firebird 4', host: '127.0.0.1', port: 30504, database: DEMO_DB, user: 'SYSDBA', password: 'masterkey', version: 4 },
   { id: 'fb5', label: 'Firebird 5', host: '127.0.0.1', port: 30505, database: DEMO_DB, user: 'SYSDBA', password: 'masterkey', version: 5 },
+  { id: 'fb6', label: 'Firebird 6', host: '127.0.0.1', port: 30507, database: DEMO_DB, user: 'SYSDBA', password: 'masterkey', version: 6 },
 ];
 
 const configs = new Map<string, ServerConfig>();

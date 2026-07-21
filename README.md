@@ -14,6 +14,11 @@
   <img src="https://img.shields.io/badge/node-%E2%89%A522-brightgreen.svg" alt="Node >= 22">
 </p>
 
+<p align="center">
+  <b>📖 Documentation: <a href="https://mreis1.github.io/fast-firebird/">mreis1.github.io/fast-firebird</a></b> — guides, the
+  <a href="https://mreis1.github.io/fast-firebird/guide/migrate-from-node-firebird.html">node-firebird migration guide</a>, and the full API reference.
+</p>
+
 ```ts
 import { connect } from '@fast-firebird/core';
 
@@ -759,7 +764,7 @@ stream + read-ahead when they don't.
 ## Live demo dashboard
 
 `apps/demo` is an interactive dashboard that exercises the whole stack against
-real Firebird 3/4/5 servers: connection/pool introspection (wire protocol,
+real Firebird 3/4/5/6 servers: connection/pool introspection (wire protocol,
 encryption, compression, charset), a SQL runner that executes the same query
 through core, Drizzle and the compat layer side by side, a feature explorer
 for what each Firebird version unlocks, live `POST_EVENT`s, backpressured row

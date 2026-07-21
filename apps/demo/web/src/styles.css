@@ -132,3 +132,4 @@ table.res th { color: var(--muted); font-weight: 600; position: sticky; top: 0; 
 .badge.since3 { background: rgba(74,163,255,0.16); color: var(--accent-2); }
 .badge.since4 { background: rgba(255,157,60,0.16); color: var(--accent); }
 .badge.since5 { background: rgba(63,185,80,0.16); color: var(--green); }
+.badge.since6 { background: rgba(188,140,255,0.16); color: #bc8cff; }
