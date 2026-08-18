@@ -1,4 +1,5 @@
 import type { FirebirdTranscodeAdapter } from '../charset/decoder.js';
+import type { TransactionOptions } from '../protocol/transaction.js';
 import { WireCryptLevel } from '../protocol/constants.js';
 
 export type WireCryptOption = 'enabled' | 'disabled' | 'required';
@@ -154,6 +155,24 @@ export interface FirebirdConnectionOptions {
   autoUpgradeReadOnly?: boolean;
 
   /**
+   * Baseline `TransactionOptions` for EVERY transaction this connection
+   * starts — explicit (`startTransaction`/`transaction`) and implicit
+   * (`query`/`run`/`execute`/`executeBatch`/`queryStream`/`prepare`/
+   * `executeScript`) alike. Per-call options override individual fields;
+   * unset fields fall back to these defaults. Default `{}`, i.e. Firebird's
+   * classic snapshot / read-write / wait-with-no-timeout.
+   *
+   * High-concurrency example (read committed, bounded lock waits, reads stay
+   * GC-friendly, one-shot writes auto-upgrade and replay):
+   * ```ts
+   * defaultTransaction: { isolation: 'readCommitted', readOnly: true, wait: 5, autoUpgradeReadOnly: true }
+   * ```
+   * Exception: `executeBatch` always opens its implicit transaction
+   * read-write (it is DML by contract), overriding a `readOnly: true` default.
+   */
+  defaultTransaction?: TransactionOptions;
+
+  /**
    * How TIMESTAMP/TIME WITH TIME ZONE columns decode:
    * - 'instant' (default): JS `Date` — the exact UTC instant; the stored
    *   zone id is dropped.
@@ -210,6 +229,7 @@ export interface ResolvedOptions {
   maxInlineBlobSize: number;
   maxBlobCacheSize: number;
   autoUpgradeReadOnly: boolean;
+  defaultTransaction: TransactionOptions;
   timeZones: 'instant' | 'zoned';
   blobWriteChunkSize: number;
   blobReadChunkSize: number;
@@ -253,6 +273,7 @@ export function resolveOptions(raw: FirebirdConnectionOptions & LegacyOptionAlia
     maxInlineBlobSize: clamp(raw.maxInlineBlobSize ?? 65_535, 0, 65_535),
     maxBlobCacheSize: Math.max(0, raw.maxBlobCacheSize ?? 10 * 1024 * 1024),
     autoUpgradeReadOnly: raw.autoUpgradeReadOnly ?? false,
+    defaultTransaction: raw.defaultTransaction ?? {},
     timeZones: raw.timeZones ?? 'instant',
     // Wire maximum by default — blob throughput is round-trip-bound.
     blobWriteChunkSize: clamp(raw.blobWriteChunkSize ?? raw.blobChunkSize ?? 65_535, 1, 65_535),

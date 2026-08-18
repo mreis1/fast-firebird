@@ -29,6 +29,37 @@ read-only mode, and lock-wait behavior (`wait: true | false | seconds`).
 for long-running loops that periodically checkpoint. Lazy blob handles from
 before a restart become invalid (reading one throws `FirebirdBlobError`).
 
+## Connection-wide transaction defaults
+
+Without options, every transaction — including the implicit one behind
+`db.query`/`execute`/`executeBatch`/`queryStream`/`executeScript` — uses
+Firebird's classic snapshot / read-write / wait-forever. That default pins
+garbage collection and turns write contention into unbounded waits, so
+high-concurrency services usually want read committed with a bounded lock
+wait. Set it once with `defaultTransaction`; per-call options still override
+field-by-field:
+
+```ts
+const db = await connect({
+  // …
+  defaultTransaction: {
+    isolation: 'readCommitted',   // per-statement visibility, GC-friendly
+    readOnly: true,               // reads are near-free for the server
+    wait: 5,                      // lock conflicts fail after 5s, never hang
+    autoUpgradeReadOnly: true,    // one-shot writes upgrade + replay transparently
+  },
+});
+
+await db.query('select …');                          // read committed, read-only
+await db.execute('insert …');                        // auto-upgrades to read-write
+await db.transaction(fn, { isolation: 'snapshot' }); // per-call override wins
+```
+
+The pool passes connect options through, so pooled connections inherit the
+same defaults. `executeBatch` is the one exception: it always opens its
+implicit transaction read-write (batch is DML by contract and is not
+upgrade-replayed).
+
 ## Nested transactions (savepoints)
 
 `tx.transaction(fn)` runs `fn` inside a SAVEPOINT: released on success,

@@ -2,10 +2,9 @@ import { Transport } from '../protocol/transport.js';
 import { WireConnection } from '../protocol/wire.js';
 import { performHandshake, type HandshakeResult } from '../protocol/handshake.js';
 import { attachDatabase, createDatabase, detachDatabase, dropDatabase } from '../protocol/attach.js';
-import { startTransaction, type TransactionOptions } from '../protocol/transaction.js';
+import { mergeTransactionOptions, startTransaction, type TransactionOptions } from '../protocol/transaction.js';
 import {
   prepareInfo,
-  runStatement,
   streamRows,
   type QueryOptions,
   type QueryResult,
@@ -133,10 +132,14 @@ export class Attachment {
     return this.handshake.compressed;
   }
 
-  /** Start an explicit transaction. */
+  /**
+   * Start an explicit transaction. Options merge field-by-field over the
+   * connection's `defaultTransaction` (see `FirebirdConnectionOptions`).
+   */
   async startTransaction(options?: TransactionOptions): Promise<Transaction> {
-    const handle = await this.withLock(() => startTransaction(this.wire, this.dbHandle, options));
-    return new Transaction(this, handle, options ?? {});
+    const merged = mergeTransactionOptions(this.options.defaultTransaction, options);
+    const handle = await this.withLock(() => startTransaction(this.wire, this.dbHandle, merged));
+    return new Transaction(this, handle, merged);
   }
 
   /**
@@ -212,11 +215,11 @@ export class Attachment {
     }
     const tx = await this.startTransaction();
     try {
-      const result = await this.withLock(() =>
-        runStatement(this.session, tx.handle, sql, params, { query: options ?? {}, txAlive: () => !tx.isFinished }),
-      );
+      // Through tx.run (not raw runStatement) so a read-only default
+      // transaction can auto-upgrade + replay one-shot writes.
+      const result = await tx.run<T>(sql, params, options);
       await tx.commit();
-      return result as QueryResult<T>;
+      return result;
     } catch (err) {
       if (!tx.isFinished) {
         try {
@@ -252,7 +255,9 @@ export class Attachment {
    * ```
    */
   async executeBatch(sql: string, rows: BatchRows, options?: BatchOptions): Promise<BatchResult> {
-    const tx = await this.startTransaction();
+    // Batch is DML by contract — never read-only, even under a read-only
+    // defaultTransaction (batches are not upgrade-replayed).
+    const tx = await this.startTransaction({ readOnly: false });
     try {
       const result = await this.withLock(() => executeBatchStatement(this.session, tx.handle, sql, rows, options));
       await tx.commit();

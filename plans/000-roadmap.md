@@ -322,7 +322,26 @@ only when API surface stabilizes (avoid premature package fragmentation).
   breakage (see backlog #15).
 - Regression: `CHARSET NONE` + win1252 round-trips (€, smart quotes, em dash).
 
-## Current status (2026-07-21, session 45)
+## Current status (2026-08-18, session 46)
+Connection-wide `defaultTransaction` (TransactionOptions merged under every
+transaction the connection starts — explicit and implicit alike; per-call
+options override field-by-field via `mergeTransactionOptions`). Motivation:
+the hardcoded implicit default (snapshot / read-write / wait-forever) pins GC
+and hangs on contention in high-concurrency services, and there was no escape
+hatch short of wrapping every call in `db.transaction(fn, opts)`. Ships with:
+`Attachment.run` now routes through `tx.run` so a read-only default
+auto-upgrades + replays one-shot writes (`autoUpgradeReadOnly`);
+`Attachment.executeBatch` forces `readOnly: false` (DML by contract, not
+upgrade-replayed). Pool/drizzle/executeScript inherit via connect options.
+Built-in defaults intentionally unchanged (still snapshot/RW/wait) — flipping
+them to readCommitted + bounded wait is a separate, breaking decision, parked.
+Verified the node-firebird2-ext effective default against its source (see
+plans/nf2-ext-integration.md): the recommended high-concurrency preset is
+`{ isolation: 'readCommitted', readOnly: true, wait: 5, autoUpgradeReadOnly: true }`.
+12 unit (TPB bytes + merge) + 32 integration tests; 1202 core + 90 drizzle
+green on FB3/4/5/6. Docs: README + docs/guide/transactions.md sections.
+
+## Previous status (2026-07-21, session 45)
 Docs site + FB6 demo. `docs/` is a VitePress workspace package deployed to
 GitHub Pages via `.github/workflows/docs.yml` (upload-pages-artifact →
 deploy-pages; requires Pages source = "GitHub Actions" in repo settings).

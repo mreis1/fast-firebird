@@ -23,9 +23,29 @@ export interface TransactionOptions {
    * replayed. The upgrade is a real commit + new transaction: the snapshot
    * moves forward and lazy Blob handles from before it become invalid; the
    * transaction stays read-write afterwards (`tx.autoUpgraded` reports it).
+   * One-shot `db.query/run/execute` route through the same path, so a
+   * read-only `defaultTransaction` upgrades transparently there too.
    * Default: the connection's `autoUpgradeReadOnly` option (false).
    */
   autoUpgradeReadOnly?: boolean;
+}
+
+/**
+ * Merge a connection's `defaultTransaction` with per-call options: fields the
+ * caller sets (non-undefined) win, everything else falls back to the defaults.
+ * @internal
+ */
+export function mergeTransactionOptions(
+  defaults: TransactionOptions,
+  overrides?: TransactionOptions,
+): TransactionOptions {
+  const merged: TransactionOptions = { ...defaults };
+  if (overrides) {
+    for (const [k, v] of Object.entries(overrides)) {
+      if (v !== undefined) (merged as Record<string, unknown>)[k] = v;
+    }
+  }
+  return merged;
 }
 
 export function buildTpb(opts: TransactionOptions = {}): Buffer {

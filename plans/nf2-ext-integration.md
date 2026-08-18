@@ -39,11 +39,61 @@ documented in the repo's `MIGRATION.md` for post-integration review.
 - `wait` → core `wait`; `lockTimeout` (n) → core `wait: n`.
 - `setIsolation` upgrade (read→write) → `tx.restart({ readOnly: false })`.
 
+**Verified 2026-08-18** against node-firebird2 `lib/index.js` + the ext's
+`Isolation` class: the ext's *effective* default (no isolation given) is
+`ISOLATION_READ_COMMITED_READ_ONLY` = `[version3, read, wait, read_committed,
+rec_version]`, and the `Isolation` class adds `lockTimeout ??= 5` whenever
+`wait` — i.e. read committed + rec_version + read-only + 5s lock timeout, with
+`upgradable: true` (RO→RW replay) as the wrapper default. Core one-liner
+(shipped as connection option `defaultTransaction`):
+`{ isolation: 'readCommitted', readOnly: true, wait: 5, autoUpgradeReadOnly: true }`.
+
 ## Transaction lifecycle
 The facade keeps node-firebird2's manual model: `queryP` lazily starts a tx
 (`ensureTx` → `attachment.startTransaction`), reused until `commitP`/`rollbackP`
 null it. `*Retaining` keep the tx (and its handle) alive. This maps cleanly onto
 core, which exposes an explicit `startTransaction()` + a long-lived `Transaction`.
+
+## Verified downstream usage contract (2026-08-18)
+Read from the live downstream consumers of the ext (connection facade,
+manager, generic-pool factory, call sites). The swap must preserve ALL of
+this:
+
+1. **Connection IS the transaction context.** What circulates through the app
+   as "`tx`" is a pooled `Fb3.Connection` (one lazy transaction per
+   connection; `ensureTx` on first `queryP`/`activateContext`). Core mapping:
+   facade holds `Attachment` + `Transaction | null`; `ensureTx` →
+   `attachment.startTransaction()` — which now inherits the connection's
+   `defaultTransaction`, so the facade's per-connection `Isolation`
+   bookkeeping can shrink to per-call overrides.
+2. **Ambient-tx composition.** The canonical function shape is
+   `fn(args, { tx? })`: use the caller's tx if given (and DON'T
+   commit/rollback), else `pool.get()` + `superEasyCommit`/`superEasyRollback`
+   in the function's own try/catch.
+3. **`superEasyCommit(tx)` = `commitP()` + release to pool**;
+   `superEasyRollback` likewise. `commitP`/`rollbackP` NEVER throw — they
+   resolve `{ err, didCommit }` and always null the facade tx. Call sites
+   sometimes skip awaiting rollback (`.catch(noop)`).
+4. **Default isolation** = `new Isolation({ mode: 'read' })` → read committed
+   + rec_version + read-only + wait + 5s lock timeout, with `upgradable: true`
+   → writes via `queryP` silently RO→RW upgrade + replay. Core:
+   `defaultTransaction: { isolation: 'readCommitted', readOnly: true, wait: 5,
+   autoUpgradeReadOnly: true }` — and core's `Attachment.run`/`tx.run` replay
+   path covers the upgrade.
+5. **`setIsolation`** only restarts an ACTIVE tx on write→read downgrade or
+   `strategy: 'force'`; otherwise it just stages the isolation for the next
+   `ensureTx`. Returns `{ applied, upgraded }`.
+6. **`activateContext(ctx)`** runs the context SQL inside the lazy tx and is
+   CLEARED whenever a new tx is assigned — context does not survive
+   commit/rollback; facade must re-run it (call sites re-activate manually).
+7. **`Qres.stringify`**: named columns Buffer→utf8 string. `queryP` options:
+   `{ params, stringify, asObject }` (`asObject: false` → array rows =
+   core `rowMode: 'array'`).
+8. **generic-pool factory**: `create` = manager connect; `destroy` =
+   `disconnect()` (facade `release()` actually DETACHES — naming trap, it is
+   pool-destroy, not pool-return); `validate` = no-op for the nf2 driver.
+   Core pool can replace generic-pool eventually, but phase 1 keeps
+   generic-pool and swaps only the connection class.
 
 ## Additions to document (MIGRATION.md)
 1. **Blobs are materialized eagerly** (Buffer for binary, string for text) instead

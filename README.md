@@ -83,7 +83,7 @@ transaction scoping, the statement-cache metadata-pinning caveat), and the
 - **Streaming** — `queryStream` async iterator with batch-level backpressure
 - **Blobs** — eager or lazy (per subtype, per column), 64KB segments with cross-blob pipelining, partial reads (`head()`) with resume, streaming reads/writes, read-ahead for streams, batch prefetch, `toFile()`, FB5/FB6 inline blobs (small blobs cost zero round trips)
 - **Types** — every scalar type including DECFLOAT(16/34), INT128, and zone-preserving `ZonedDate`
-- **Transactions** — isolation/read-only/lock-wait options, `restart()`, nested transactions via savepoints, opt-in RO→RW auto-upgrade, `await using` support
+- **Transactions** — isolation/read-only/lock-wait options, connection-wide `defaultTransaction`, `restart()`, nested transactions via savepoints, opt-in RO→RW auto-upgrade, `await using` support
 - **Ecosystem** — connection pool, `POST_EVENT` listener, Services API (server info, gstat, gbak backup/restore), isql-faithful script parser, Drizzle ORM adapter (with nested transactions, plain-SQL migrator, RDB$ introspection → schema codegen), legacy `CHARSET NONE` transcoding toolkit
 
 ## Queries
@@ -259,6 +259,37 @@ await tx.commit();
 `restart` reuses the same `Transaction` object (its `handle` changes) — handy
 for long-running loops that periodically checkpoint. Lazy blob handles from
 before a restart become invalid (reading one throws `FirebirdBlobError`).
+
+### Connection-wide transaction defaults
+
+Without options, every transaction — including the implicit one behind
+`db.query`/`execute`/`executeBatch`/`queryStream`/`executeScript` — uses
+Firebird's classic snapshot / read-write / wait-forever. That default pins
+garbage collection and turns write contention into unbounded waits, so
+high-concurrency services usually want read committed with a bounded lock
+wait. Set it once with `defaultTransaction`; per-call options still override
+field-by-field:
+
+```ts
+const db = await connect({
+  // …
+  defaultTransaction: {
+    isolation: 'readCommitted',   // per-statement visibility, GC-friendly
+    readOnly: true,               // reads are near-free for the server
+    wait: 5,                      // lock conflicts fail after 5s, never hang
+    autoUpgradeReadOnly: true,    // one-shot writes upgrade + replay transparently
+  },
+});
+
+await db.query('select …');                        // read committed, read-only
+await db.execute('insert …');                      // auto-upgrades to read-write
+await db.transaction(fn, { isolation: 'snapshot' }); // per-call override wins
+```
+
+The pool passes connect options through, so pooled connections inherit the
+same defaults. `executeBatch` is the one exception: it always opens its
+implicit transaction read-write (batch is DML by contract and is not
+upgrade-replayed).
 
 ### Nested transactions (savepoints)
 
