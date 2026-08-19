@@ -186,6 +186,13 @@ only when API surface stabilizes (avoid premature package fragmentation).
 
 ## Deferred backlog (explicitly parked, in rough priority order)
 
+0. **Script-runner field-report batch** — see `plans/script-runner-feedback.md`
+   (triaged 2026-08-18): executeScript `transactionOptions` + caller-supplied
+   `Transaction` (the reported blocker), `StatementResult` error typing +
+   gdsCode/sqlState, `ParsedStatement.kind` DDL/DML hint, `commentRanges`/
+   `stripComments` parser API, naive-TIMESTAMP + RETURNING docs, services
+   nbackup/nrestore. Three planned sessions.
+
 ~~1. `SELECT *` projection rewrite~~ — SHIPPED 2026-07-13, see
    `plans/projection.md`.
 
