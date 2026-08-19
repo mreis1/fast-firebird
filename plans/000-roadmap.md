@@ -186,6 +186,13 @@ only when API surface stabilizes (avoid premature package fragmentation).
 
 ## Deferred backlog (explicitly parked, in rough priority order)
 
+0a. **Script client-commands** — see `plans/script-client-commands.md`
+   (planned 2026-08-19): executeScript processes RECONNECT / COMMIT /
+   ROLLBACK / SET TRANSACTION / SET AUTODDL driver-side instead of shipping
+   them to the server (COMMIT-as-DSQL currently desyncs the executor — bug
+   fix, process-by-default). Prerequisite: `Attachment.reconnect()`.
+   Absorbs parked B2 (autoDdl).
+
 0. **Script-runner field-report batch** — see `plans/script-runner-feedback.md`
    (triaged 2026-08-18): executeScript `transactionOptions` + caller-supplied
    `Transaction` (the reported blocker), `StatementResult` error typing +

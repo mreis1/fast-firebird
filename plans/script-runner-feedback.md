@@ -71,6 +71,8 @@ export interface ExecuteScriptOptions extends ParseScriptOptions {
 ### B2 ☐ (optional, demand-driven) `transaction: 'autoDdl'`
 Commit-after-DDL mode built on A4's `kind`. Parked until someone asks —
 A4 + 'perStatement'/caller-loop already lets consumers emulate it.
+**2026-08-19: absorbed into `plans/script-client-commands.md`** — delivered
+as script-driven `SET AUTODDL ON` processing (phase 2 there).
 
 ## Batch C — comment/string-aware scanning API (report #2)
 
