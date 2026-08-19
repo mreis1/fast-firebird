@@ -7,7 +7,11 @@
  * correctness comes from honoring the terminator (which is exactly why
  * `SET TERM ^ ;` exists for PSQL bodies). Rules verified against
  * firebird/src/isql/FrontendLexer.cpp.
+ *
+ * All delimiter recognition lives in `scanner.ts` (`regionAt`), shared with
+ * the public `commentRanges`/`stripComments` helpers.
  */
+import { regionAt, UNTERMINATED_MESSAGE } from './scanner.js';
 
 /**
  * Statement classification from the leading keyword(s). A HEURISTIC: it
@@ -43,6 +47,66 @@ export class ScriptParseError extends Error {
   ) {
     super(`${message} (line ${line}, column ${column})`);
   }
+}
+
+function lineColAt(text: string, index: number): { line: number; column: number } {
+  let line = 1;
+  let column = 1;
+  for (let k = 0; k < index; k++) {
+    if (text[k] === '\n') {
+      line++;
+      column = 1;
+    } else {
+      column++;
+    }
+  }
+  return { line, column };
+}
+
+/**
+ * All comment ranges (line and block) in `sql` as `[start, end)` index
+ * pairs — computed by the SAME scanner `parseScript` uses, so a
+ * preprocessor's "is index N inside a comment?" verdict cannot diverge from
+ * the statement splitter on q-literals, `--` inside quoted identifiers, or a
+ * block-comment opener inside a string. Throws `ScriptParseError` on the
+ * same malformed input `parseScript` rejects (unterminated block comment /
+ * string / q-literal).
+ */
+export function commentRanges(sql: string): Array<[start: number, end: number]> {
+  const out: Array<[number, number]> = [];
+  let i = 0;
+  while (i < sql.length) {
+    const r = regionAt(sql, i);
+    if (!r) {
+      i++;
+      continue;
+    }
+    if (!r.terminated) {
+      const { line, column } = lineColAt(sql, r.start);
+      throw new ScriptParseError(UNTERMINATED_MESSAGE[r.type as keyof typeof UNTERMINATED_MESSAGE], line, column);
+    }
+    if (r.type === 'line-comment' || r.type === 'block-comment') out.push([r.start, r.end]);
+    i = r.end;
+  }
+  return out;
+}
+
+/**
+ * Blank out every comment, LENGTH-PRESERVING: comment characters become
+ * spaces but newlines survive, so indexes, line and column positions in the
+ * result match the input exactly. Same scanner (and same errors) as
+ * `parseScript`/`commentRanges`.
+ */
+export function stripComments(sql: string): string {
+  const ranges = commentRanges(sql);
+  if (ranges.length === 0) return sql;
+  let out = '';
+  let prev = 0;
+  for (const [s, e] of ranges) {
+    out += sql.slice(prev, s) + sql.slice(s, e).replace(/[^\n\r]/g, ' ');
+    prev = e;
+  }
+  return out + sql.slice(prev);
 }
 
 const SET_TERM_RE = /^set\s+term\b/i;
@@ -125,23 +189,13 @@ export function parseScript(script: string, options: ParseScriptOptions = {}): P
     let sawContent = false;
     let terminated = false;
     while (i < n) {
-      const c = script[i]!;
-      if (c === '-' && script[i + 1] === '-') {
-        skipLineComment();
-        continue;
-      }
-      if (c === '/' && script[i + 1] === '*') {
-        skipBlockComment();
-        continue;
-      }
-      if (c === "'" || c === '"') {
-        skipQuoted(c);
-        sawContent = true;
-        continue;
-      }
-      if ((c === 'q' || c === 'Q') && script[i + 1] === "'") {
-        skipQLiteral();
-        sawContent = true;
+      const r = regionAt(script, i);
+      if (r) {
+        if (!r.terminated) {
+          throw new ScriptParseError(UNTERMINATED_MESSAGE[r.type as keyof typeof UNTERMINATED_MESSAGE], line, col);
+        }
+        if (r.type !== 'line-comment' && r.type !== 'block-comment') sawContent = true;
+        advance(r.end - i);
         continue;
       }
       if (matchesTerminator(i)) {
@@ -149,7 +203,7 @@ export function parseScript(script: string, options: ParseScriptOptions = {}): P
         terminated = true;
         break;
       }
-      if (!/\s/.test(c)) sawContent = true;
+      if (!/\s/.test(script[i]!)) sawContent = true;
       advance();
     }
 
@@ -170,59 +224,16 @@ export function parseScript(script: string, options: ParseScriptOptions = {}): P
       if (c === undefined) return;
       if (/\s/.test(c)) {
         advance();
-      } else if (c === '-' && script[i + 1] === '-') {
-        skipLineComment();
-      } else if (c === '/' && script[i + 1] === '*') {
-        skipBlockComment();
-      } else {
-        return;
+        continue;
       }
-    }
-  }
-
-  function skipLineComment(): void {
-    advance(2); // consume --
-    while (i < n && script[i] !== '\n' && script[i] !== '\r') advance();
-  }
-
-  function skipBlockComment(): void {
-    const sl = line;
-    const sc = col;
-    advance(2); // consume /*
-    while (i < n && !(script[i] === '*' && script[i + 1] === '/')) advance();
-    if (i >= n) throw new ScriptParseError('Unterminated block comment', sl, sc);
-    advance(2); // consume */
-  }
-
-  function skipQuoted(quote: string): void {
-    const sl = line;
-    const sc = col;
-    advance(); // opening quote
-    while (i < n) {
-      if (script[i] === quote) {
-        if (script[i + 1] === quote) {
-          advance(2); // escaped quote ''
-          continue;
-        }
-        advance(); // closing quote
-        return;
+      const r = regionAt(script, i);
+      if (r && (r.type === 'line-comment' || r.type === 'block-comment')) {
+        if (!r.terminated) throw new ScriptParseError('Unterminated block comment', line, col);
+        advance(r.end - i);
+        continue;
       }
-      advance();
+      return;
     }
-    throw new ScriptParseError(`Unterminated ${quote === "'" ? 'string' : 'quoted identifier'}`, sl, sc);
-  }
-
-  function skipQLiteral(): void {
-    const sl = line;
-    const sc = col;
-    advance(2); // consume q'
-    const opener = script[i];
-    if (opener === undefined) throw new ScriptParseError('Unterminated q-literal', sl, sc);
-    const closer = { '{': '}', '[': ']', '(': ')', '<': '>' }[opener] ?? opener;
-    advance(); // consume opener delimiter char
-    while (i < n && !(script[i] === closer && script[i + 1] === "'")) advance();
-    if (i >= n) throw new ScriptParseError('Unterminated q-literal', sl, sc);
-    advance(2); // consume closer + '
   }
 
   function tryConsumeSetTerm(sl: number, sc: number): boolean {

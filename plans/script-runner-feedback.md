@@ -74,7 +74,7 @@ A4 + 'perStatement'/caller-loop already lets consumers emulate it.
 
 ## Batch C — comment/string-aware scanning API (report #2)
 
-### C1 ☐ `commentRanges(sql)` / `stripComments(sql)`
+### C1 ☑ `commentRanges(sql)` / `stripComments(sql)`
 Consumers preprocessing scripts (e.g. directive markers in comments) need to
 know whether index N is inside a comment. The parser already owns this logic
 (`skipLineComment`/`skipBlockComment`/quote/q-literal handling) but exposes

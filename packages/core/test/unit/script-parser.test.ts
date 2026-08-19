@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { classifyStatement, parseScript, ScriptParseError, type StatementKind } from '../../src/script/parser.js';
+import {
+  classifyStatement,
+  commentRanges,
+  parseScript,
+  ScriptParseError,
+  stripComments,
+  type StatementKind,
+} from '../../src/script/parser.js';
 
 const sqls = (script: string) => parseScript(script).map((s) => s.sql);
 
@@ -168,5 +175,75 @@ describe('classifyStatement / ParsedStatement.kind', () => {
       (s) => s.kind,
     );
     expect(kinds).toEqual(['ddl', 'dml', 'other']);
+  });
+});
+
+describe('commentRanges / stripComments (scanner shared with parseScript)', () => {
+  const rangesText = (sql: string) => commentRanges(sql).map(([s, e]) => sql.slice(s, e));
+
+  it('reports line and block comments with exact [start, end) offsets', () => {
+    const sql = 'select 1 -- tail\n/* head */ select 2';
+    expect(rangesText(sql)).toEqual(['-- tail', '/* head */']);
+    const [s1, e1] = commentRanges(sql)[0]!;
+    expect(sql.slice(s1, e1)).toBe('-- tail');
+  });
+
+  it('a block-comment opener inside a string is NOT a comment', () => {
+    expect(commentRanges(`select '/* not a comment */' from t`)).toEqual([]);
+    expect(commentRanges(`select 'a -- b' from t`)).toEqual([]);
+  });
+
+  it('a -- inside a quoted identifier is NOT a comment', () => {
+    expect(commentRanges(`select "WEIRD--NAME" from t`)).toEqual([]);
+  });
+
+  it('comment markers inside q-literals are NOT comments', () => {
+    expect(commentRanges(`select q'{ /* nope */ -- nope }' from t`)).toEqual([]);
+  });
+
+  it('doubled-quote escapes do not end the string early', () => {
+    expect(commentRanges(`select 'it''s -- fine' from t -- real`).length).toBe(1);
+  });
+
+  it('throws the same ScriptParseError parseScript throws on malformed input', () => {
+    expect(() => commentRanges('select 1 /* nope')).toThrow(/Unterminated block comment/);
+    expect(() => commentRanges("select 'open")).toThrow(/Unterminated string/);
+    expect(() => commentRanges("select q'{open")).toThrow(/Unterminated q-literal/);
+    let err: ScriptParseError | undefined;
+    try {
+      commentRanges('select 1;\n  /* nope');
+    } catch (e) {
+      err = e as ScriptParseError;
+    }
+    expect(err).toBeInstanceOf(ScriptParseError);
+    expect(err!.line).toBe(2);
+    expect(err!.column).toBe(3);
+  });
+
+  it('stripComments is length-preserving and keeps newlines', () => {
+    const sql = 'select 1 /* a\nb */ -- tail\n, 2';
+    const out = stripComments(sql);
+    expect(out.length).toBe(sql.length);
+    expect(out.split('\n').length).toBe(sql.split('\n').length);
+    expect(out).toBe('select 1     \n            \n, 2');
+    expect(out.indexOf(', 2')).toBe(sql.indexOf(', 2')); // indexes stable
+  });
+
+  it('stripComments leaves strings and q-literals intact', () => {
+    const sql = `select '/* keep */' || q'{ -- keep }' from t /* drop */`;
+    const out = stripComments(sql);
+    expect(out).toContain(`'/* keep */'`);
+    expect(out).toContain(`q'{ -- keep }'`);
+    expect(out).not.toContain('drop');
+  });
+
+  it('agrees with parseScript by construction: directive-in-comment scenario', () => {
+    // A preprocessor looking for a [NOWAIT]-style marker must not trust one
+    // that is commented out. commentRanges answers with the parser's lexing.
+    const sql = `-- [DIRECTIVE]\nselect q'{ [DIRECTIVE] }' from t; /* [DIRECTIVE] */ select 2;`;
+    const inComment = (idx: number) => commentRanges(sql).some(([s, e]) => idx >= s && idx < e);
+    const positions = [...sql.matchAll(/\[DIRECTIVE\]/g)].map((m) => m.index!);
+    expect(positions.map(inComment)).toEqual([true, false, true]);
+    expect(parseScript(sql).map((s) => s.sql)).toEqual([`select q'{ [DIRECTIVE] }' from t`, 'select 2']);
   });
 });

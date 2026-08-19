@@ -5,6 +5,8 @@ export { Pool, createPool, type PoolOptions, type PoolStats } from './pool/pool.
 export {
   parseScript,
   classifyStatement,
+  commentRanges,
+  stripComments,
   ScriptParseError,
   type ParsedStatement,
   type ParseScriptOptions,

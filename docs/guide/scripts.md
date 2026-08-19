@@ -46,3 +46,26 @@ and `kind: 'ddl' | 'dml' | 'other'` — a leading-keyword heuristic
 (`EXECUTE BLOCK` is 'other'; it can hide DDL) that makes commit-after-DDL
 policies (Delphi `AutoDDL` style) easy to build on `parseScript` +
 `classifyStatement(sql)`.
+
+## Comment-aware preprocessing
+
+Script preprocessors (directive markers, conditional sections) need to know
+whether an offset sits inside a comment — and a hand-rolled scanner will
+disagree with the parser on exactly the hard cases (q-literals, `--` inside
+quoted identifiers, a `/*` inside a string). `commentRanges` and
+`stripComments` run the SAME scanner `parseScript` uses, so they cannot
+diverge:
+
+```ts
+import { commentRanges, stripComments } from '@fast-firebird/core';
+
+const ranges = commentRanges(sql);        // [start, end) index pairs
+const active = (idx: number) => !ranges.some(([s, e]) => idx >= s && idx < e);
+
+stripComments(sql);  // comments blanked to spaces, LENGTH-PRESERVING:
+                     // newlines survive, so indexes and line/column
+                     // positions still match the original
+```
+
+Both throw the same `ScriptParseError` (with line/column) that `parseScript`
+throws on malformed input.
