@@ -9,6 +9,15 @@
  * firebird/src/isql/FrontendLexer.cpp.
  */
 
+/**
+ * Statement classification from the leading keyword(s). A HEURISTIC: it
+ * cannot see through `EXECUTE BLOCK` bodies (which can hide DDL via
+ * `EXECUTE STATEMENT`) — those classify as 'other'. Intended for
+ * commit-after-DDL policies (Delphi `AutoDDL` style), not as a security
+ * boundary.
+ */
+export type StatementKind = 'ddl' | 'dml' | 'other';
+
 export interface ParsedStatement {
   /** Statement text, trimmed, with the trailing terminator removed. */
   sql: string;
@@ -16,6 +25,8 @@ export interface ParsedStatement {
   line: number;
   /** 1-based column of the first non-space character. */
   column: number;
+  /** Leading-keyword classification (see StatementKind — a heuristic). */
+  kind: StatementKind;
 }
 
 export interface ParseScriptOptions {
@@ -35,6 +46,37 @@ export class ScriptParseError extends Error {
 }
 
 const SET_TERM_RE = /^set\s+term\b/i;
+
+/** Classify a statement by its leading keyword(s). Exported for reuse. */
+export function classifyStatement(sql: string): StatementKind {
+  // Comments may sit between the keywords; strip them from the head before
+  // tokenizing (also handles a block comment cut off by the slice).
+  const head = sql.slice(0, 400).replace(/--[^\n]*|\/\*[\s\S]*?(\*\/|$)/g, ' ');
+  const words = head.toLowerCase().match(/[a-z$_][\w$]*/g) ?? [];
+  const [w1, w2] = words;
+  switch (w1) {
+    case 'create': // incl. CREATE OR ALTER
+    case 'alter':
+    case 'drop':
+    case 'recreate':
+    case 'comment': // COMMENT ON
+    case 'grant':
+    case 'revoke':
+    case 'declare': // DECLARE FILTER / DECLARE EXTERNAL FUNCTION
+      return 'ddl';
+    case 'set':
+      return w2 === 'generator' ? 'ddl' : 'other'; // SET TRANSACTION/STATISTICS… = other
+    case 'insert':
+    case 'update': // incl. UPDATE OR INSERT
+    case 'delete':
+    case 'merge':
+      return 'dml';
+    case 'execute':
+      return w2 === 'procedure' ? 'dml' : 'other'; // EXECUTE BLOCK = other
+    default:
+      return 'other'; // SELECT, COMMIT, ROLLBACK, CONNECT, …
+  }
+}
 
 /** Parse a Firebird script into individual statements. */
 export function parseScript(script: string, options: ParseScriptOptions = {}): ParsedStatement[] {
@@ -114,7 +156,7 @@ export function parseScript(script: string, options: ParseScriptOptions = {}): P
     if (sawContent) {
       const rawEnd = terminated ? i - terminator.length : i;
       const sql = script.slice(startIndex, rawEnd).trim();
-      if (sql.length > 0) statements.push({ sql, line: startLine, column: startCol });
+      if (sql.length > 0) statements.push({ sql, line: startLine, column: startCol, kind: classifyStatement(sql) });
     }
   }
 

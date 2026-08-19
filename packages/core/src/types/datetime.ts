@@ -43,6 +43,13 @@ export function decodeTimestamp(days: number, fractions: number): Date {
   return new Date(localMidnight.valueOf() + fractions / FRAC_PER_MS);
 }
 
+/**
+ * A JS `Date` binds to a timezone-naive TIMESTAMP as LOCAL wall-clock
+ * components (`getFullYear()`/`getHours()`, …) — the right semantics for a
+ * column with no zone, but NOT the UTC instant `toISOString()` prints. For
+ * instant semantics use TIMESTAMP WITH TIME ZONE (bind a `ZonedDate`, or a
+ * `Date` under `timeZones` handling).
+ */
 export function encodeTimestamp(value: Date): { days: number; fractions: number } {
   const days = dateToDays(value.getFullYear(), value.getMonth() + 1, value.getDate());
   const ms =

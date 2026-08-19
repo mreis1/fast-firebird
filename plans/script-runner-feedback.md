@@ -8,7 +8,7 @@ Status legend: ☐ planned ◐ partial ☑ done
 
 ## Batch A — quick wins (one session, no design risk)
 
-### A1 ☐ `StatementResult.error` typing + classification fields (report #3)
+### A1 ☑ `StatementResult.error` typing + classification fields (report #3)
 `script/execute.ts:10` types the caught error as plain `Error`, hiding
 `FirebirdError.gdsCode/sqlState` that every consumer needs for
 retry-vs-stop classification (e.g. 335544345 lock conflict → retry;
@@ -18,7 +18,7 @@ constraint violation → stop).
   `FirebirdError`) so classification needs no `instanceof` dance.
 - Unit test over a failing script with `continueOnError`.
 
-### A2 ☐ Naive TIMESTAMP JSDoc (report #5a)
+### A2 ☑ Naive TIMESTAMP JSDoc (report #5a)
 `types/datetime.ts` `encodeTimestamp` uses local wall-clock components
 (`getFullYear()/getHours()`) — correct for timezone-naive columns, but
 undocumented; a consumer shipped a `toISOString()` banner 2h off before
@@ -26,13 +26,13 @@ reading the source. Add JSDoc on the `Date` branch of param binding +
 a warning in the types guide page: a JS `Date` binds as LOCAL wall-clock to
 naive TIMESTAMP; use `ZonedDate`/`timeZones: 'zoned'` for instants.
 
-### A3 ☐ Document `RETURNING` needs `run()` (report #5b)
+### A3 ☑ Document `RETURNING` needs `run()` (report #5b)
 `INSERT … RETURNING` yields its row via op_execute2 — `db.run()` exposes it
 (`rows[0]` + `rowsAffected`); `queryOne` works but the idiom is undocumented
 and consumers guess wrong. Add an example to README + `docs/guide/queries.md`
 (the "everywhere" Firebird idiom: `insert … returning id` → `db.run(...)`).
 
-### A4 ☐ `ParsedStatement.kind` hint (report #4)
+### A4 ☑ `ParsedStatement.kind` hint (report #4)
 `kind: 'ddl' | 'dml' | 'other'` from the leading keyword(s), enabling
 Delphi-style `AutoDDL` (commit after DDL) emulation without a per-statement
 transaction for everything.
@@ -46,7 +46,7 @@ transaction for everything.
 
 ## Batch B — executeScript transaction control (report #1, the blocker)
 
-### B1 ☐ `transactionOptions` + caller-supplied `Transaction`
+### B1 ☑ `transactionOptions` + caller-supplied `Transaction`
 This blocked the consumer outright: `executeScript` calls bare
 `startTransaction()` (`script/execute.ts:67/80`), so per-script isolation /
 nowait was unreachable and they rebuilt ~40 lines around `parseScript`.

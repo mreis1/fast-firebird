@@ -21,6 +21,18 @@ Firebird 4 additions that trip up older drivers.
 (default — `number` when the value fits safely, `bigint` otherwise),
 `'bigint'`, or `'number'`.
 
+::: warning Naive TIMESTAMP ⇄ `Date` uses local wall-clock
+A JS `Date` binds to a timezone-naive `TIMESTAMP`/`DATE`/`TIME` by its **local
+wall-clock components** (`getFullYear()`, `getHours()`, …) — the right
+semantics for a column that has no zone, but *not* the UTC instant that
+`date.toISOString()` prints. If your process runs at UTC+2, binding
+`new Date('2026-08-19T10:00:00Z')` stores `12:00`, and printing the parameter
+with `toISOString()` will look two hours off from what lands in the column.
+Decoding is symmetric (naive values come back as local-wall-clock `Date`s), so
+round-trips are lossless. For instant semantics use `TIMESTAMP WITH TIME ZONE`
+(bind a `ZonedDate` or a `Date`).
+:::
+
 ## Zone-preserving time zone types (FB4+)
 
 By default, `TIMESTAMP/TIME WITH TIME ZONE` columns decode to JS `Date` — the

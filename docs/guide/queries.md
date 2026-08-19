@@ -27,6 +27,13 @@ const rows = await db.query('select id, name from users');               // Row[
 const user = await db.queryOne('select * from users where id = ?', [7]); // Row | undefined
 const n    = await db.execute('delete from log where created < ?', [cutoff]); // number
 
+// INSERT … RETURNING — the everywhere-in-Firebird idiom for generated keys.
+// The row arrives with the execute (op_execute2, no extra round trip);
+// run() hands you both the row and the affected count:
+const r = await db.run('insert into users (name) values (?) returning id', ['Ann']);
+r.rows[0]!.ID;      // the generated key
+r.rowsAffected;     // 1
+
 // Compile-time row typing (no runtime validation) flows through the shortcut:
 interface User { ID: number; NAME: string }
 const typed = await db.query<User>('select id, name from users');

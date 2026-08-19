@@ -89,4 +89,96 @@ describe.each(FB_SERVERS)('executeScript on Firebird $version', ({ port, version
     `);
     expect(result.statements.map((s) => s.rowsAffected)).toEqual([1, 1, 2]);
   });
+
+  it('failed statements carry gdsCode + sqlState for classification', async () => {
+    const result = await db.executeScript(`insert into no_such_table_qq (id) values (1);`, {
+      continueOnError: true,
+    });
+    const failed = result.statements[0]!;
+    expect(failed.error).toBeDefined();
+    expect(typeof failed.gdsCode).toBe('number');
+    expect(failed.sqlState).toMatch(/^\w{5}$/);
+  });
+
+  it('transactionOptions reaches the perScript transaction (nowait fails fast)', async () => {
+    await db.execute(`delete from ${log}`);
+    await db.execute(`insert into ${log} (id, note) values (99, 'held')`);
+    const other = await connect({ ...FB_BASE, port, database: db.options.database });
+    const holder = await other.startTransaction();
+    try {
+      await holder.execute(`update ${log} set note = 'locked' where id = 99`);
+      const started = Date.now();
+      await expect(
+        db.executeScript(`update ${log} set note = 'blocked' where id = 99;`, {
+          transactionOptions: { isolation: 'readCommitted', wait: false },
+        }),
+      ).rejects.toThrow(/update conflicts|lock conflict/i);
+      expect(Date.now() - started).toBeLessThan(500);
+    } finally {
+      await holder.rollback();
+      await other.disconnect();
+    }
+  });
+
+  it('runs on a caller-supplied Transaction and never finishes it', async () => {
+    await db.execute(`delete from ${log}`);
+    const tx = await db.startTransaction();
+    const result = await db.executeScript(
+      `insert into ${log} (id) values (201);
+       insert into ${log} (id) values (202);`,
+      { transaction: tx },
+    );
+    expect(result.succeeded).toBe(2);
+    expect(tx.isFinished).toBe(false);
+    // Composes atomically with the caller's own statement…
+    await tx.execute(`insert into ${log} (id) values (203)`);
+    await tx.rollback(); // …and the CALLER decides the outcome.
+    const [c] = await db.query(`select count(*) as n from ${log}`);
+    expect(Number(c!.N)).toBe(0);
+  });
+
+  it('caller tx: a failing statement propagates and leaves the tx alive', async () => {
+    await db.execute(`delete from ${log}`);
+    const tx = await db.startTransaction();
+    try {
+      await expect(
+        db.executeScript(
+          `insert into ${log} (id) values (301);
+           insert into no_such_table_zz (id) values (1);`,
+          { transaction: tx },
+        ),
+      ).rejects.toThrow(/Table unknown|Dynamic SQL Error/i);
+      expect(tx.isFinished).toBe(false); // caller owns the outcome
+      await tx.commit(); // keep the statement that DID run
+    } catch (err) {
+      if (!tx.isFinished) await tx.rollback();
+      throw err;
+    }
+    const rows = await db.query(`select id from ${log}`);
+    expect(rows).toEqual([{ ID: 301 }]);
+  });
+
+  it('rejects transactionOptions with none / a caller Transaction', async () => {
+    await expect(
+      db.executeScript('select 1 from rdb$database;', { transaction: 'none', transactionOptions: { wait: false } }),
+    ).rejects.toThrow(/transactionOptions is invalid with transaction: 'none'/);
+    const tx = await db.startTransaction();
+    try {
+      await expect(
+        db.executeScript('select 1 from rdb$database;', { transaction: tx, transactionOptions: { wait: false } }),
+      ).rejects.toThrow(/transactionOptions is invalid with a caller-supplied Transaction/);
+    } finally {
+      await tx.rollback();
+    }
+  });
+
+  it('parsed statements expose kind through the result', async () => {
+    const result = await db.executeScript(
+      `recreate table kind_probe_${version} (id int);
+       insert into kind_probe_${version} (id) values (1);
+       select * from kind_probe_${version};`,
+      { transaction: 'perStatement' },
+    );
+    expect(result.statements.map((s) => s.statement.kind)).toEqual(['ddl', 'dml', 'other']);
+  });
 });

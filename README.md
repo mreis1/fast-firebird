@@ -115,6 +115,12 @@ const rows = await db.query('select id, name from users');               // Row[
 const user = await db.queryOne('select * from users where id = ?', [7]); // Row | undefined
 const n    = await db.execute('delete from log where created < ?', [cutoff]); // number
 
+// INSERT … RETURNING — run() hands you the returned row AND the count
+// (the row rides the execute itself, no extra round trip):
+const r = await db.run('insert into users (name) values (?) returning id', ['Ann']);
+r.rows[0]!.ID;   // generated key
+r.rowsAffected;  // 1
+
 // Compile-time row typing (no runtime validation) flows through the shortcut:
 interface User { ID: number; NAME: string }
 const typed = await db.query<User>('select id, name from users');
@@ -628,8 +634,13 @@ await db.executeScript(`
 The parser is isql-faithful: honors `SET TERM`, PSQL bodies (no naive `;`
 splitting), string/quoted-identifier/`q'…'` literals, and `--` / `/* */`
 comments, with line/column error positions. `executeScript` supports
-`transaction: 'perScript' | 'perStatement' | 'none'`, `continueOnError`, and an
-`onProgress` callback. `parseScript(sql)` is also exported standalone.
+`transaction: 'perScript' | 'perStatement' | 'none'` — or a caller-supplied
+`Transaction` (the script runs on YOUR transaction and never finishes it) —
+plus `transactionOptions` for the modes that open one, `continueOnError`
+(failed statements carry `gdsCode`/`sqlState` for retry-vs-stop
+classification), and an `onProgress` callback. `parseScript(sql)` is also
+exported standalone; each statement carries a `kind: 'ddl' | 'dml' | 'other'`
+leading-keyword hint for commit-after-DDL policies.
 
 ## Events (POST_EVENT)
 

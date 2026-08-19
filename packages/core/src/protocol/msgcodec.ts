@@ -282,6 +282,10 @@ export type ParamValue =
   | number
   | bigint
   | boolean
+  // A Date bound to a timezone-naive TIMESTAMP/DATE/TIME uses its LOCAL
+  // wall-clock components (getFullYear()/getHours(), …), not the UTC instant
+  // toISOString() prints. Naive columns have no zone — for instants use
+  // TIMESTAMP WITH TIME ZONE (see ZonedDate / the timeZones option).
   | Date
   | ZonedDate
   | Buffer
