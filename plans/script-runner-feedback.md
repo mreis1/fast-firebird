@@ -94,7 +94,7 @@ strings).
 
 ## Batch D — services: nbackup (report #6)
 
-### D1 ☐ Typed `nbackup` / `nrestore`
+### D1 ☑ Typed `nbackup` / `nrestore`
 gbak-style `backup`/`restore` exist (`services/service.ts:124/139`); nbackup
 doesn't — and physical incremental backup (`-L` lock / copy / `-N` unlock,
 or level-based deltas) is what maintenance windows actually use on multi-GB

@@ -18,7 +18,14 @@ export {
   type StatementResult,
 } from './script/execute.js';
 export { EventListener, EventChannel } from './events/events.js';
-export { Service, connectService, type ServiceConnectOptions, type ServerInfo } from './services/service.js';
+export {
+  Service,
+  connectService,
+  type ServiceConnectOptions,
+  type ServerInfo,
+  type NBackupOptions,
+  type NRestoreOptions,
+} from './services/service.js';
 export type { QueryResult, Row, QueryOptions, ColumnInfo } from './api/session.js';
 export { Blob, prefetchBlobs } from './api/blob.js';
 export { ZonedDate } from './types/zoned-date.js';

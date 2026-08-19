@@ -329,7 +329,23 @@ only when API surface stabilizes (avoid premature package fragmentation).
   breakage (see backlog #15).
 - Regression: `CHARSET NONE` + win1252 round-trips (€, smart quotes, em dash).
 
-## Current status (2026-08-18, session 46)
+## Current status (2026-08-19, session 47)
+Script-runner feedback plan executed end-to-end (all four batches of
+`plans/script-runner-feedback.md`, one commit per session): (1) executeScript
+`transactionOptions` + caller-supplied `Transaction` (script composes
+atomically with caller work, never finishes the caller's tx),
+`StatementResult` gains `Error|FirebirdError` typing + lifted
+`gdsCode`/`sqlState`, `ParsedStatement.kind` ddl/dml/other +
+`classifyStatement()`, naive-TIMESTAMP + RETURNING docs; (2) new
+`script/scanner.ts` `regionAt` — single owner of delimiter rules —
+`parseScript` rewritten onto it byte-compatibly, public `commentRanges` /
+`stripComments` (length-preserving) consistent with the parser by
+construction; (3) Services `nbackup`/`nrestore` (level/GUID increments,
+online page-level backup, chain restore; constants verified against the
+Firebird source). Only B2 ('autoDdl' mode) stays parked, demand-driven.
+Suite grown 1292 → 1357 core+drizzle, green on FB3/4/5/6.
+
+## Previous status (2026-08-18, session 46)
 Connection-wide `defaultTransaction` (TransactionOptions merged under every
 transaction the connection starts — explicit and implicit alike; per-call
 options override field-by-field via `mergeTransactionOptions`). Motivation:

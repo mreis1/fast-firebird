@@ -78,6 +78,63 @@ describe.each(FB_SERVERS)('gbak backup/restore on Firebird $version', ({ port, v
     await dropDatabaseAt(port, srcPath);
   });
 
+  it('nbackup level 0 + level 1 chain restores with all increments applied', async () => {
+    const src = await freshDb(port);
+    const srcPath = (src as any).options.database as string;
+    const nbk0 = srcPath.replace(/\.fdb$/, '.nbk0');
+    const nbk1 = srcPath.replace(/\.fdb$/, '.nbk1');
+    const restoredPath = srcPath.replace(/\.fdb$/, '_nrestored.fdb');
+    await ddl(src, `recreate table NB_T (id integer not null primary key, val varchar(30))`);
+    await src.execute(`insert into NB_T values (1, 'in level 0 €')`);
+
+    const svc = await connectService({ ...creds, port });
+    try {
+      // Level 0: full physical copy — the database stays ONLINE (src is
+      // still attached); that is nbackup's whole point.
+      await svc.nbackup(srcPath, nbk0, { level: 0 });
+      await src.execute(`insert into NB_T values (2, 'in level 1')`);
+      await svc.nbackup(srcPath, nbk1, { level: 1 });
+      await src.disconnect();
+
+      // Restore the chain in order into a NEW database.
+      await svc.nrestore([nbk0, nbk1], restoredPath);
+    } finally {
+      if (src.isAlive) await src.disconnect().catch(() => undefined);
+      await svc.disconnect();
+    }
+
+    const restored = await connect({ ...FB_BASE, port, database: restoredPath });
+    try {
+      const rows = await restored.query(`select id, val from NB_T order by id`);
+      expect(rows).toEqual([
+        { ID: 1, VAL: 'in level 0 €' },
+        { ID: 2, VAL: 'in level 1' },
+      ]);
+    } finally {
+      await restored.dropDatabase();
+    }
+    await dropDatabaseAt(port, srcPath);
+  });
+
+  it('nrestore refuses an existing target; nbackup rejects level+guid', async () => {
+    const src = await freshDb(port);
+    const srcPath = (src as any).options.database as string;
+    const nbk = srcPath.replace(/\.fdb$/, '.nbkx');
+    await src.disconnect();
+
+    const svc = await connectService({ ...creds, port });
+    try {
+      await expect(svc.nbackup(srcPath, nbk, { level: 0, guid: '{X}' })).rejects.toThrow(/mutually exclusive/);
+      await svc.nbackup(srcPath, nbk); // default level 0
+      // nbackup never overwrites: restoring onto the live source path fails.
+      await expect(svc.nrestore([nbk], srcPath)).rejects.toThrow(/exist|error|failed/i);
+      await expect(svc.nrestore([], '/tmp/x.fdb')).rejects.toThrow(/at least one backup file/);
+    } finally {
+      await svc.disconnect();
+    }
+    await dropDatabaseAt(port, srcPath);
+  });
+
   it('restore without replace refuses to overwrite an existing database', async () => {
     const src = await freshDb(port);
     const srcPath = (src as any).options.database as string;

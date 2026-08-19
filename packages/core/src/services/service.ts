@@ -1,7 +1,7 @@
 import { Transport } from '../protocol/transport.js';
 import { WireConnection } from '../protocol/wire.js';
 import { performHandshake, readResponseWithAuth } from '../protocol/handshake.js';
-import { Info, Op, SERVICE_MGR, Spb, SvcAction, SvcInfo, SvcRestoreFlag } from '../protocol/constants.js';
+import { Info, Op, SERVICE_MGR, Spb, SvcAction, SvcInfo, SvcNBackupFlag, SvcRestoreFlag } from '../protocol/constants.js';
 import { ParamBuffer } from '../protocol/buffers.js';
 import { resolveOptions, type FirebirdConnectionOptions, type LegacyOptionAliases } from '../api/options.js';
 
@@ -20,6 +20,28 @@ export interface ServerInfo {
   implementation: string;
   /** Path to the security database in use. */
   securityDatabase?: string;
+}
+
+export interface NBackupOptions {
+  /**
+   * Backup level: 0 = full physical copy, n = pages changed since the last
+   * level n−1 backup. Default 0. Mutually exclusive with `guid`.
+   */
+  level?: number;
+  /**
+   * FB4+: back up pages changed since the backup with this GUID (see
+   * `RDB$BACKUP_HISTORY`). Mutually exclusive with `level`.
+   */
+  guid?: string;
+  /** Suppress database triggers during the run (nbackup -T). */
+  noDBTriggers?: boolean;
+  /** Force direct I/O on or off (nbackup -D ON|OFF). Server default if unset. */
+  direct?: boolean;
+}
+
+export interface NRestoreOptions {
+  /** Suppress database triggers during the restore (nbackup -T). */
+  noDBTriggers?: boolean;
 }
 
 /**
@@ -148,6 +170,57 @@ export class Service {
     spb.rawInt32(Spb.options, options.replace ? SvcRestoreFlag.replace : SvcRestoreFlag.create);
     if (options.pageSize) spb.rawInt32(Spb.res_page_size, options.pageSize);
     spb.tag(Spb.verbose);
+    await this.serviceStart(spb.toBuffer());
+    return this.collectOutput();
+  }
+
+  /**
+   * Physical incremental backup via server-side nbackup — the fast path for
+   * multi-GB maintenance windows (page-level copy, database stays online),
+   * where gbak is a logical dump. BOTH paths are SERVER paths. Level 0 is a
+   * full physical copy; level n captures pages changed since the last
+   * level n−1 backup. FB4+ can address the base backup by GUID (from
+   * `RDB$BACKUP_HISTORY`) instead of a level. Returns the (usually empty)
+   * service output; completion is signaled by output EOF.
+   *
+   * ```ts
+   * await svc.nbackup('/data/app.fdb', '/backups/app.nbk0', { level: 0 });
+   * await svc.nbackup('/data/app.fdb', '/backups/app.nbk1', { level: 1 });
+   * ```
+   */
+  async nbackup(database: string, backupFile: string, options: NBackupOptions = {}): Promise<string> {
+    const spb = new ParamBuffer();
+    spb.tag(SvcAction.nbackup);
+    spb.string2(Spb.dbname, database);
+    spb.string2(Spb.nbk_file, backupFile);
+    if (options.guid !== undefined) {
+      if (options.level !== undefined) throw new Error('nbackup: level and guid are mutually exclusive');
+      spb.string2(Spb.nbk_guid, options.guid);
+    } else {
+      spb.rawInt32(Spb.nbk_level, options.level ?? 0);
+    }
+    if (options.noDBTriggers) spb.rawInt32(Spb.options, SvcNBackupFlag.no_triggers);
+    if (options.direct !== undefined) spb.string2(Spb.nbk_direct, options.direct ? 'ON' : 'OFF');
+    await this.serviceStart(spb.toBuffer());
+    return this.collectOutput();
+  }
+
+  /**
+   * Restore an nbackup chain (level 0 file first, then each delta in order)
+   * into a NEW database — the target must not exist; nbackup never
+   * overwrites. All paths are SERVER paths.
+   *
+   * ```ts
+   * await svc.nrestore(['/backups/app.nbk0', '/backups/app.nbk1'], '/data/restored.fdb');
+   * ```
+   */
+  async nrestore(backupFiles: string[], database: string, options: NRestoreOptions = {}): Promise<string> {
+    if (backupFiles.length === 0) throw new Error('nrestore: at least one backup file is required');
+    const spb = new ParamBuffer();
+    spb.tag(SvcAction.nrestore);
+    spb.string2(Spb.dbname, database);
+    for (const f of backupFiles) spb.string2(Spb.nbk_file, f);
+    if (options.noDBTriggers) spb.rawInt32(Spb.options, SvcNBackupFlag.no_triggers);
     await this.serviceStart(spb.toBuffer());
     return this.collectOutput();
   }

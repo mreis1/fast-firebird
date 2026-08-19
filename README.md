@@ -84,7 +84,7 @@ transaction scoping, the statement-cache metadata-pinning caveat), and the
 - **Blobs** — eager or lazy (per subtype, per column), 64KB segments with cross-blob pipelining, partial reads (`head()`) with resume, streaming reads/writes, read-ahead for streams, batch prefetch, `toFile()`, FB5/FB6 inline blobs (small blobs cost zero round trips)
 - **Types** — every scalar type including DECFLOAT(16/34), INT128, and zone-preserving `ZonedDate`
 - **Transactions** — isolation/read-only/lock-wait options, connection-wide `defaultTransaction`, `restart()`, nested transactions via savepoints, opt-in RO→RW auto-upgrade, `await using` support
-- **Ecosystem** — connection pool, `POST_EVENT` listener, Services API (server info, gstat, gbak backup/restore), isql-faithful script parser, Drizzle ORM adapter (with nested transactions, plain-SQL migrator, RDB$ introspection → schema codegen), legacy `CHARSET NONE` transcoding toolkit
+- **Ecosystem** — connection pool, `POST_EVENT` listener, Services API (server info, gstat, gbak backup/restore, nbackup incremental backup/restore), isql-faithful script parser, Drizzle ORM adapter (with nested transactions, plain-SQL migrator, RDB$ introspection → schema codegen), legacy `CHARSET NONE` transcoding toolkit
 
 ## Queries
 
@@ -671,6 +671,12 @@ const stats = await svc.getStatistics('/data/app.fdb');  // gstat output
 await svc.backup('/data/app.fdb', '/backups/app.fbk');
 await svc.restore('/backups/app.fbk', '/data/app_copy.fdb');            // create
 await svc.restore('/backups/app.fbk', '/data/app.fdb', { replace: true }); // overwrite
+
+// Physical incremental backup (nbackup) — page-level, database stays ONLINE;
+// the fast path for multi-GB maintenance windows where gbak is too slow:
+await svc.nbackup('/data/app.fdb', '/backups/app.nbk0', { level: 0 });  // full
+await svc.nbackup('/data/app.fdb', '/backups/app.nbk1', { level: 1 });  // delta
+await svc.nrestore(['/backups/app.nbk0', '/backups/app.nbk1'], '/data/restored.fdb');
 
 await svc.disconnect();
 ```

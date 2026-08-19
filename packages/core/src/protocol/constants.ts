@@ -333,6 +333,12 @@ export const enum Spb {
   res_page_size = 10, // isc_spb_res_page_size
   verbose = 107, // isc_spb_verbose (bare tag)
   options = 108, // isc_spb_options (IntSpb bitmask)
+  // isc_action_svc_nbak/nrest tags (action-scoped — nbk_level shares the
+  // byte value of bkp_file; SPB tag meaning depends on the action):
+  nbk_level = 5, // isc_spb_nbk_level (IntSpb)
+  nbk_file = 6, // isc_spb_nbk_file (StringSpb; repeatable for nrest)
+  nbk_direct = 7, // isc_spb_nbk_direct (StringSpb "ON"/"OFF")
+  nbk_guid = 8, // isc_spb_nbk_guid (StringSpb, FB4+)
 }
 
 /** isc_spb_options bitmask values for isc_action_svc_restore. */
@@ -362,6 +368,15 @@ export const enum SvcAction {
   backup = 1,
   restore = 2,
   db_stats = 11,
+  nbackup = 20, // isc_action_svc_nbak
+  nrestore = 21, // isc_action_svc_nrest
+}
+
+/** isc_spb_options bitmask values for isc_action_svc_nbak. */
+export const enum SvcNBackupFlag {
+  no_triggers = 0x01, // isc_spb_nbk_no_triggers
+  inplace = 0x02, // isc_spb_nbk_inplace (FB4+)
+  sequence = 0x04, // isc_spb_nbk_sequence (FB5+)
 }
 
 export const enum Info {
