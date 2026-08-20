@@ -9,6 +9,8 @@ import {
   type Engine,
   type Feature,
   type QueryResult,
+  type ScriptRunResult,
+  type ScriptTxMode,
   type ServerCfg,
   type ServerInfo,
   type TryResult,
@@ -136,6 +138,7 @@ export function App() {
           <InfoPanel key={`info-${active}-${nonce}`} id={active} onDisconnect={() => disconnect(active)} onToggleCompression={toggleCompression} onUpdateConfig={updateConfig} />
           <PoolPanel key={`pool-${active}-${nonce}`} id={active} />
           <QueryPanel key={`q-${active}`} id={active} />
+          <ScriptPanel key={`sc-${active}`} id={active} />
           <FeaturesPanel key={`ft-${active}`} id={active} />
           <EventsPanel key={`ev-${active}-${nonce}`} id={active} />
           <StreamPanel key={`st-${active}`} id={active} />
@@ -565,6 +568,191 @@ function QueryPanel({ id }: { id: string }) {
         </div>
       )}
       {results.some((r) => r.note) && <div className="note">{results.find((r) => r.note)?.note}</div>}
+    </div>
+  );
+}
+
+/** Ready-made scripts, each showcasing one client-command capability. */
+const SCRIPT_EXAMPLES: Record<string, string> = {
+  'commit checkpoints': `-- COMMIT is processed by the DRIVER (never sent to the server):
+-- it checkpoints the perScript transaction. Everything after the
+-- last COMMIT rolls back when the bad insert fails.
+recreate table FF_DEMO_SCRIPT (id integer, note varchar(60));
+commit;
+insert into FF_DEMO_SCRIPT values (1, 'kept — committed checkpoint');
+commit;
+insert into FF_DEMO_SCRIPT values (2, 'rolled back with the failure below');
+insert into NO_SUCH_TABLE values (1);`,
+  'set transaction': `-- SET TRANSACTION maps isql clauses onto TransactionOptions and
+-- restarts the script's transaction (it must be clean — commit first).
+recreate table FF_DEMO_SCRIPT (id integer, note varchar(60));
+commit;
+set transaction read committed record_version lock timeout 5;
+insert into FF_DEMO_SCRIPT values (10, 'ran under READ COMMITTED, lock timeout 5s');
+commit;
+set transaction snapshot;
+insert into FF_DEMO_SCRIPT values (11, 'ran under SNAPSHOT');`,
+  reconnect: `-- RECONNECT commits, re-attaches the SAME connection object, and
+-- opens a fresh transaction — watch CURRENT_CONNECTION change.
+recreate table FF_DEMO_SCRIPT (id integer, note varchar(60));
+commit;
+insert into FF_DEMO_SCRIPT values (current_connection, 'connection before RECONNECT');
+reconnect;
+insert into FF_DEMO_SCRIPT values (current_connection, 'connection after RECONNECT');`,
+  autoddl: `-- SET AUTODDL ON commits after every DDL statement (Delphi-installer
+-- style), so the table survives even though the last statement fails.
+set autoddl on;
+recreate table FF_DEMO_AUTODDL (id integer);
+insert into FF_DEMO_AUTODDL values (1);
+insert into NO_SUCH_TABLE values (1);`,
+  savepoints: `-- SAVEPOINT / ROLLBACK TO stay SERVER-side (safe inside the current
+-- transaction) — only whole-transaction control is intercepted.
+recreate table FF_DEMO_SCRIPT (id integer, note varchar(60));
+commit;
+insert into FF_DEMO_SCRIPT values (1, 'kept');
+savepoint sp1;
+insert into FF_DEMO_SCRIPT values (2, 'undone by ROLLBACK TO sp1');
+rollback to savepoint sp1;
+insert into FF_DEMO_SCRIPT values (3, 'kept');`,
+};
+
+function ScriptPanel({ id }: { id: string }) {
+  const [script, setScript] = useState(SCRIPT_EXAMPLES['commit checkpoints']);
+  const [example, setExample] = useState('commit checkpoints');
+  const [txMode, setTxMode] = useState<ScriptTxMode>('perScript');
+  const [clientCommands, setClientCommands] = useState<'process' | 'error'>('process');
+  const [continueOnError, setContinueOnError] = useState(false);
+  const [res, setRes] = useState<ScriptRunResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const run = async () => {
+    setBusy(true);
+    setErr(null);
+    setRes(null);
+    try {
+      setRes(await api.script(id, script, txMode, clientCommands, continueOnError));
+    } catch (e) {
+      setErr(String((e as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card wide">
+      <h2>Script runner — isql-style client commands, processed by the driver</h2>
+      <div className="row" style={{ marginBottom: 6 }}>
+        <span className="unit">examples</span>
+        <div className="seg">
+          {Object.keys(SCRIPT_EXAMPLES).map((k) => (
+            <button
+              key={k}
+              className={example === k ? 'active' : ''}
+              onClick={() => {
+                setExample(k);
+                setScript(SCRIPT_EXAMPLES[k]);
+                setRes(null);
+                setErr(null);
+              }}
+            >
+              {k}
+            </button>
+          ))}
+        </div>
+      </div>
+      <textarea
+        rows={9}
+        style={{ fontFamily: 'var(--mono)' }}
+        spellCheck={false}
+        value={script}
+        onChange={(e) => setScript(e.target.value)}
+      />
+      <div className="row mt">
+        <span className="unit">transaction</span>
+        <div className="seg">
+          {(['perScript', 'perStatement', 'none'] as const).map((m) => (
+            <button key={m} className={txMode === m ? 'active' : ''} onClick={() => setTxMode(m)}>
+              {m}
+            </button>
+          ))}
+        </div>
+        <span className="unit">client commands</span>
+        <div className="seg">
+          {(['process', 'error'] as const).map((m) => (
+            <button key={m} className={clientCommands === m ? 'active' : ''} onClick={() => setClientCommands(m)}>
+              {m}
+            </button>
+          ))}
+        </div>
+        <label className="unit" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+          <input type="checkbox" style={{ width: 'auto' }} checked={continueOnError} onChange={(e) => setContinueOnError(e.target.checked)} />
+          continue on error
+        </label>
+        <button className="btn" onClick={run} disabled={busy}>
+          {busy ? 'running…' : 'Run script'}
+        </button>
+      </div>
+      {err && <div className="err-text" style={{ marginTop: 10 }}>{err}</div>}
+      {res && (
+        <>
+          <div className="row mt" style={{ gap: 10 }}>
+            <span className="badge on">{res.succeeded} ok</span>
+            {res.failed > 0 && <span className="badge off">{res.failed} failed</span>}
+            <span className="unit">{res.ms} ms</span>
+            {res.error && <span className="err-text" style={{ marginTop: 0 }}>script stopped: {res.error}</span>}
+          </div>
+          {res.statements.length > 0 && (
+            <div className="scroll" style={{ marginTop: 10, maxHeight: 260 }}>
+              <table className="res">
+                <thead>
+                  <tr><th>#</th><th>line</th><th>kind</th><th>statement</th><th>rows</th><th>result</th></tr>
+                </thead>
+                <tbody>
+                  {res.statements.map((s) => (
+                    <tr key={s.index}>
+                      <td>{s.index + 1}</td>
+                      <td>{s.line}</td>
+                      <td>
+                        {s.kind === 'client'
+                          ? <span className="badge on" title="Processed by the driver — never sent to the server">client · {s.client}</span>
+                          : s.kind}
+                      </td>
+                      <td style={{ fontFamily: 'var(--mono)', fontSize: 11, whiteSpace: 'pre-wrap' }}>{s.sql}</td>
+                      <td>{s.rowsAffected || s.rowCount || 0}</td>
+                      <td>{s.error ? <span className="err-text" style={{ marginTop: 0 }}>{s.error}</span> : '✓'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+      <details style={{ marginTop: 10 }}>
+        <summary style={{ cursor: 'pointer', color: 'var(--accent-2)', fontSize: 12 }}>Supported client commands</summary>
+        <div className="scroll" style={{ marginTop: 8 }}>
+          <table className="res">
+            <thead>
+              <tr><th>command</th><th>perScript</th><th>perStatement / none</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>COMMIT</code> / <code>ROLLBACK</code> <code>[WORK]</code></td><td>checkpoint: finish the script transaction, open a fresh one</td><td>no-op (statements already autocommit)</td></tr>
+              <tr><td><code>COMMIT</code> / <code>ROLLBACK</code> <code>RETAIN</code></td><td>commit/rollback retaining (context stays open)</td><td>no-op</td></tr>
+              <tr><td><code>SET TRANSACTION …</code></td><td>restart with the mapped options (current tx must be clean); template for later reopens</td><td>perStatement: options for the next statements · none: error</td></tr>
+              <tr><td><code>RECONNECT</code></td><td>commit, re-attach (same object), fresh transaction</td><td>re-attach between statements</td></tr>
+              <tr><td><code>SET AUTODDL ON|OFF</code></td><td>commit + reopen after every DDL statement</td><td>no-op</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div className="note">
+          <code>SET TRANSACTION</code> clauses: <code>READ WRITE|READ ONLY</code>, <code>[NO] WAIT</code>, <code>LOCK TIMEOUT n</code>,{' '}
+          <code>[ISOLATION LEVEL] SNAPSHOT [TABLE [STABILITY]]</code>, <code>READ COMMITTED [[NO] RECORD_VERSION]</code>, <code>AUTO COMMIT</code>.
+          Unmappable clauses (<code>RESERVING</code>, <code>READ CONSISTENCY</code>, …) are rejected by name. Transaction control is{' '}
+          <b>never</b> forwarded to the server — a server-executed COMMIT would desync the script's transaction. <code>SAVEPOINT</code>/
+          <code>ROLLBACK TO</code> stay server-side. With a caller-supplied transaction (API only) every client command errors.
+        </div>
+      </details>
     </div>
   );
 }

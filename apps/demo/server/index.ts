@@ -136,6 +136,65 @@ app.post('/api/servers/:id/query', async (req) => {
   return runQuery(state, engine, sql, params ?? [], txWait);
 });
 
+// ── Script runner: multi-statement scripts with driver-side client commands ──
+// Runs on a DEDICATED attachment (not the pool) so a script RECONNECT only
+// re-attaches its own connection. The per-statement trace is collected via
+// onProgress, so it survives a mid-script failure.
+app.post('/api/servers/:id/script', async (req, reply) => {
+  const { id } = req.params as { id: string };
+  const body = req.body as {
+    script: string;
+    transaction?: 'perScript' | 'perStatement' | 'none';
+    clientCommands?: 'process' | 'error';
+    continueOnError?: boolean;
+  };
+  if (!body?.script?.trim()) {
+    reply.code(400);
+    return { error: 'script is empty' };
+  }
+  const state = await getServer(id);
+  const att = await connect(connectOptsFor(state.config));
+  const trace: unknown[] = [];
+  try {
+    const t0 = performance.now();
+    let error: string | undefined;
+    let counts = { succeeded: 0, failed: 0 };
+    try {
+      const result = await att.executeScript(body.script, {
+        transaction: ['perScript', 'perStatement', 'none'].includes(body.transaction as string)
+          ? body.transaction
+          : 'perScript',
+        clientCommands: body.clientCommands === 'error' ? 'error' : 'process',
+        continueOnError: !!body.continueOnError,
+        onProgress: (r, total) => {
+          trace.push({
+            index: r.index,
+            total,
+            line: r.statement.line,
+            kind: r.statement.kind,
+            client: r.statement.client?.op,
+            sql: r.statement.sql.length > 160 ? `${r.statement.sql.slice(0, 157)}…` : r.statement.sql,
+            rowsAffected: r.rowsAffected,
+            rowCount: r.rowCount,
+            error: r.error ? String(r.error.message).split('\n').slice(0, 2).join(' — ') : undefined,
+            gdsCode: r.gdsCode,
+          });
+        },
+      });
+      counts = { succeeded: result.succeeded, failed: result.failed };
+    } catch (err) {
+      error = String((err as Error).message).split('\n').slice(0, 3).join(' — ');
+      counts = {
+        succeeded: trace.filter((t) => !(t as { error?: string }).error).length,
+        failed: trace.filter((t) => (t as { error?: string }).error).length,
+      };
+    }
+    return { ...counts, ms: +(performance.now() - t0).toFixed(1), error, statements: trace };
+  } finally {
+    await att.disconnect().catch(() => void 0);
+  }
+});
+
 app.post('/api/servers/:id/benchmark', async (req) => {
   const { id } = req.params as { id: string };
   const { n } = req.body as { n?: number };

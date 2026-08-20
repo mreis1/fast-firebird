@@ -113,6 +113,31 @@ export interface CustomBenchResult {
   error?: string;
 }
 
+export interface ScriptStatement {
+  index: number;
+  total: number;
+  line: number;
+  kind: 'ddl' | 'dml' | 'other' | 'client';
+  /** Client-command op when kind === 'client' (commit, rollback, reconnect, setTransaction, setAutoDdl). */
+  client?: string;
+  sql: string;
+  rowsAffected: number;
+  rowCount: number;
+  error?: string;
+  gdsCode?: number;
+}
+
+export interface ScriptRunResult {
+  succeeded: number;
+  failed: number;
+  ms: number;
+  /** Script-level error (a failing statement without continueOnError, or a rejected option). */
+  error?: string;
+  statements: ScriptStatement[];
+}
+
+export type ScriptTxMode = 'perScript' | 'perStatement' | 'none';
+
 async function json<T>(url: string, body?: unknown, method?: string): Promise<T> {
   const res = await fetch(url, {
     method: method ?? (body ? 'POST' : 'GET'),
@@ -141,6 +166,8 @@ export const api = {
   tryFeature: (id: string, setup: string[], sql: string) => json<TryResult>(`/api/servers/${id}/try-feature`, { setup, sql }),
   customBench: (id: string, columns: BenchColumnDef[], rows: number, ddlWait?: TxWait, fetchConnections?: number) =>
     json<CustomBenchResult>(`/api/servers/${id}/custom-bench`, { columns, rows, ddlWait, fetchConnections }),
+  script: (id: string, script: string, transaction: ScriptTxMode, clientCommands: 'process' | 'error', continueOnError: boolean) =>
+    json<ScriptRunResult>(`/api/servers/${id}/script`, { script, transaction, clientCommands, continueOnError }),
 };
 
 /**
