@@ -270,10 +270,15 @@ before a restart become invalid (reading one throws `FirebirdBlobError`).
 
 Without options, every transaction — including the implicit one behind
 `db.query`/`execute`/`executeBatch`/`queryStream`/`executeScript` — uses
-Firebird's classic snapshot / read-write / wait-forever. That default pins
-garbage collection and turns write contention into unbounded waits, so
-high-concurrency services usually want read committed with a bounded lock
-wait. Set it once with `defaultTransaction`; per-call options still override
+snapshot / read-write / **lock wait 10 s**. The isolation and access mode are
+Firebird's classic defaults; the lock wait deliberately is not: Firebird's
+native default is WAIT with no timeout, which turns any lock conflict (or DDL
+against metadata pinned by a prepared statement anywhere) into an unbounded
+hang. With the driver default, blocked work fails after 10 s with a clear
+"lock time-out on wait transaction" error; opt back into unbounded waiting
+explicitly with `wait: true`. Snapshot isolation still pins garbage
+collection, so high-concurrency services usually want read committed too —
+set it once with `defaultTransaction`; per-call options still override
 field-by-field:
 
 ```ts

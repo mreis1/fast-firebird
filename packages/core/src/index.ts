@@ -31,7 +31,7 @@ export {
 export type { QueryResult, Row, QueryOptions, ColumnInfo } from './api/session.js';
 export { Blob, prefetchBlobs } from './api/blob.js';
 export { ZonedDate } from './types/zoned-date.js';
-export type { TransactionOptions, IsolationLevel } from './protocol/transaction.js';
+export { DEFAULT_LOCK_TIMEOUT_SECONDS, type TransactionOptions, type IsolationLevel } from './protocol/transaction.js';
 export type { ParamValue } from './protocol/msgcodec.js';
 export {
   rewriteNamedParams,

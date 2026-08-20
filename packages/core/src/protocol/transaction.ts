@@ -8,10 +8,26 @@ export type IsolationLevel =
   | 'readCommitted' // read_committed + rec_version
   | 'readCommittedNoRecVersion';
 
+/**
+ * Driver default lock wait, in seconds. Firebird's native default is WAIT
+ * with NO timeout — a blocked statement (a lock conflict, or DDL against
+ * metadata pinned by any prepared statement anywhere) waits forever, which
+ * reads as a hang. The driver defaults to a 10s timeout instead: blocked
+ * work fails with a clear "lock time-out on wait transaction" error. Opt
+ * back into Firebird's unbounded wait explicitly with `wait: true`.
+ */
+export const DEFAULT_LOCK_TIMEOUT_SECONDS = 10;
+
 export interface TransactionOptions {
   isolation?: IsolationLevel;
   readOnly?: boolean;
-  /** true (default) = wait for locks; number = lock timeout seconds; false = nowait. */
+  /**
+   * Lock-wait behavior: number = wait up to that many seconds, then error;
+   * `false` = nowait (fail immediately); `true` = wait forever (Firebird's
+   * native default). Driver default when unset: **10 seconds**
+   * (`DEFAULT_LOCK_TIMEOUT_SECONDS`) — so contention surfaces as a clear
+   * lock-timeout error instead of an unbounded hang.
+   */
   wait?: boolean | number;
   autoCommit?: boolean;
   /**
@@ -65,7 +81,7 @@ export function buildTpb(opts: TransactionOptions = {}): Buffer {
       break;
   }
   pb.tag(opts.readOnly ? Tpb.read : Tpb.write);
-  const wait = opts.wait ?? true;
+  const wait = opts.wait ?? DEFAULT_LOCK_TIMEOUT_SECONDS;
   if (wait === false) {
     pb.tag(Tpb.nowait);
   } else {

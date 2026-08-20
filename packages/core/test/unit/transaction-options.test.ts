@@ -2,9 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { buildTpb, mergeTransactionOptions } from '../../src/protocol/transaction.js';
 import { Tpb } from '../../src/protocol/constants.js';
 
+/** The driver-default lock timeout clumplet: wait + lock_timeout 10 (LE int32). */
+const WAIT_10 = [Tpb.wait, Tpb.lock_timeout, 4, 10, 0, 0, 0];
+
 describe('buildTpb', () => {
-  it('defaults to snapshot / read-write / wait (no timeout)', () => {
-    expect([...buildTpb()]).toEqual([Tpb.version3, Tpb.concurrency, Tpb.write, Tpb.wait]);
+  it('defaults to snapshot / read-write / wait with a 10s lock timeout', () => {
+    expect([...buildTpb()]).toEqual([Tpb.version3, Tpb.concurrency, Tpb.write, ...WAIT_10]);
+  });
+
+  it('wait: true opts back into Firebird-native unbounded wait (no timeout)', () => {
+    expect([...buildTpb({ wait: true })]).toEqual([Tpb.version3, Tpb.concurrency, Tpb.write, Tpb.wait]);
   });
 
   it('readCommitted emits read_committed + rec_version', () => {
@@ -13,7 +20,7 @@ describe('buildTpb', () => {
       Tpb.read_committed,
       Tpb.rec_version,
       Tpb.write,
-      Tpb.wait,
+      ...WAIT_10,
     ]);
   });
 
@@ -23,7 +30,7 @@ describe('buildTpb', () => {
       Tpb.read_committed,
       Tpb.no_rec_version,
       Tpb.write,
-      Tpb.wait,
+      ...WAIT_10,
     ]);
   });
 
@@ -47,7 +54,7 @@ describe('buildTpb', () => {
   });
 
   it('readOnly emits read', () => {
-    expect([...buildTpb({ readOnly: true })]).toEqual([Tpb.version3, Tpb.concurrency, Tpb.read, Tpb.wait]);
+    expect([...buildTpb({ readOnly: true })]).toEqual([Tpb.version3, Tpb.concurrency, Tpb.read, ...WAIT_10]);
   });
 
   it('the node-firebird2 high-concurrency pattern round-trips', () => {

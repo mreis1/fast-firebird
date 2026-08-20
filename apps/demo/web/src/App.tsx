@@ -501,7 +501,7 @@ function IsolationPicker({ value, onChange }: { value: TxIsolation | undefined; 
       isolation
       <select
         style={{ maxWidth: 190 }}
-        title="Isolation for the core lane's transaction. Driver default = snapshot (concurrency), read-write, wait forever."
+        title="Isolation for the core lane's transaction. Driver default = snapshot (concurrency), read-write, lock wait 10 s."
         value={value ?? ''}
         onChange={(e) => onChange((e.target.value || undefined) as TxIsolation | undefined)}
       >
@@ -802,9 +802,10 @@ function ScriptPanel({ id }: { id: string }) {
           Unmappable clauses (<code>RESERVING</code>, <code>READ CONSISTENCY</code>, …) are rejected by name. Transaction control is{' '}
           <b>never</b> forwarded to the server — a server-executed COMMIT would desync the script's transaction. <code>SAVEPOINT</code>/
           <code>ROLLBACK TO</code> stay server-side. With a caller-supplied transaction (API only) every client command errors.
-          Anti-hang defaults in this demo: scripts run with <b>lock wait 10 s</b> (driver default is Firebird's wait-forever — change it
-          with the picker or a script <code>SET TRANSACTION … LOCK TIMEOUT n</code>), and the demo releases its own statement caches
-          (SQL-runner lanes) before each run so cached statements don't pin metadata against your DDL.
+          Anti-hang defaults: transactions run with <b>lock wait 10 s</b> (the driver's own default — Firebird's native default is an
+          unbounded wait; change it with the picker, <code>wait: true</code>, or a script <code>SET TRANSACTION … LOCK TIMEOUT n</code>),
+          and the demo releases its own statement caches (SQL-runner lanes) before each run so cached statements don't pin metadata
+          against your DDL.
         </div>
       </details>
     </div>
