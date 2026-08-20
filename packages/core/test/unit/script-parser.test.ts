@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  classifyClientCommand,
   classifyStatement,
   commentRanges,
   parseScript,
   ScriptParseError,
   stripComments,
+  type ClientCommand,
   type StatementKind,
 } from '../../src/script/parser.js';
 
@@ -154,10 +156,17 @@ describe('classifyStatement / ParsedStatement.kind', () => {
     ["execute procedure p('a')", 'dml'],
     ['select * from t', 'other'],
     ['execute block as begin end', 'other'],
-    ['set transaction read committed', 'other'],
     ['set statistics index idx', 'other'],
-    ['commit work', 'other'],
-    ['rollback', 'other'],
+    // Client commands (processed driver-side by executeScript, never sent):
+    ['set transaction read committed', 'client'],
+    ['commit work', 'client'],
+    ['rollback', 'client'],
+    ['RECONNECT', 'client'],
+    ['set autoddl on', 'client'],
+    // …but transaction-RELATED statements inside the current tx stay server-side:
+    ['savepoint sp1', 'other'],
+    ['release savepoint sp1', 'other'],
+    ['rollback to savepoint sp1', 'other'],
   ];
 
   it.each(cases)('%s → %s', (sql, kind) => {
@@ -175,6 +184,132 @@ describe('classifyStatement / ParsedStatement.kind', () => {
       (s) => s.kind,
     );
     expect(kinds).toEqual(['ddl', 'dml', 'other']);
+  });
+});
+
+describe('classifyClientCommand', () => {
+  const cc = classifyClientCommand;
+
+  it('recognizes COMMIT/ROLLBACK with WORK/RETAIN[/SNAPSHOT] in grammar order', () => {
+    expect(cc('commit')).toEqual({ op: 'commit', retain: false });
+    expect(cc('COMMIT WORK')).toEqual({ op: 'commit', retain: false });
+    expect(cc('commit retain')).toEqual({ op: 'commit', retain: true });
+    expect(cc('commit work retain')).toEqual({ op: 'commit', retain: true });
+    expect(cc('commit work retain snapshot')).toEqual({ op: 'commit', retain: true });
+    expect(cc('rollback')).toEqual({ op: 'rollback', retain: false });
+    expect(cc('ROLLBACK WORK RETAIN')).toEqual({ op: 'rollback', retain: true });
+  });
+
+  it('is comment-tolerant and ignores a trailing semicolon', () => {
+    expect(cc('/* checkpoint */ commit -- keep it\n work')).toEqual({ op: 'commit', retain: false });
+    expect(cc('commit;')).toEqual({ op: 'commit', retain: false });
+    expect(cc('reconnect ;')).toEqual({ op: 'reconnect' });
+  });
+
+  it('leaves savepoint statements to the server (real in-transaction DSQL)', () => {
+    expect(cc('rollback to savepoint sp1')).toBeNull();
+    expect(cc('rollback work to sp1')).toBeNull();
+    expect(cc('savepoint sp1')).toBeNull();
+    expect(cc('release savepoint sp1')).toBeNull();
+  });
+
+  it('claims a garbled COMMIT/ROLLBACK head as unsupported instead of letting it slip to the wire', () => {
+    const r = cc('commit everything') as ClientCommand & { op: 'unsupported' };
+    expect(r.op).toBe('unsupported');
+    expect(r.reason).toMatch(/COMMIT.*EVERYTHING/);
+  });
+
+  it('recognizes RECONNECT only as the whole statement', () => {
+    expect(cc('reconnect')).toEqual({ op: 'reconnect' });
+    expect(cc('RECONNECT')).toEqual({ op: 'reconnect' });
+    expect(cc('reconnect now')).toBeNull(); // not the command → server (which rejects it)
+  });
+
+  it('recognizes SET AUTODDL / SET AUTO and demands an explicit ON|OFF', () => {
+    expect(cc('set autoddl on')).toEqual({ op: 'setAutoDdl', on: true });
+    expect(cc('SET AUTO OFF')).toEqual({ op: 'setAutoDdl', on: false });
+    const bare = cc('set autoddl') as ClientCommand & { op: 'unsupported' };
+    expect(bare.op).toBe('unsupported');
+    expect(bare.reason).toMatch(/ON or OFF/);
+  });
+
+  it('maps SET TRANSACTION clauses onto TransactionOptions', () => {
+    expect(cc('set transaction')).toMatchObject({ op: 'setTransaction', options: {} });
+    expect(cc('set transaction read write wait')).toMatchObject({
+      op: 'setTransaction',
+      options: { readOnly: false, wait: true },
+    });
+    expect(cc('set transaction read only no wait')).toMatchObject({
+      op: 'setTransaction',
+      options: { readOnly: true, wait: false },
+    });
+    expect(cc('set transaction isolation level snapshot')).toMatchObject({
+      op: 'setTransaction',
+      options: { isolation: 'snapshot' },
+    });
+    expect(cc('set transaction snapshot table stability')).toMatchObject({
+      op: 'setTransaction',
+      options: { isolation: 'serializable' },
+    });
+    // Bare READ COMMITTED = NO record version (parse.y version_mode default).
+    expect(cc('set transaction read committed')).toMatchObject({
+      op: 'setTransaction',
+      options: { isolation: 'readCommittedNoRecVersion' },
+    });
+    expect(cc('set transaction read committed record_version')).toMatchObject({
+      op: 'setTransaction',
+      options: { isolation: 'readCommitted' },
+    });
+    expect(cc('set transaction read committed version')).toMatchObject({
+      op: 'setTransaction',
+      options: { isolation: 'readCommitted' },
+    });
+    expect(cc('set transaction read committed no record_version')).toMatchObject({
+      op: 'setTransaction',
+      options: { isolation: 'readCommittedNoRecVersion' },
+    });
+    expect(cc('set transaction read committed record_version lock timeout 5')).toMatchObject({
+      op: 'setTransaction',
+      options: { isolation: 'readCommitted', wait: 5 },
+    });
+    expect(cc('set transaction auto commit')).toMatchObject({
+      op: 'setTransaction',
+      options: { autoCommit: true },
+    });
+  });
+
+  it('rejects unmappable SET TRANSACTION clauses BY NAME (wire-guard contract)', () => {
+    const cases: Array<[string, RegExp]> = [
+      ['set transaction reserving t1 for protected write', /RESERVING/],
+      ['set transaction no auto undo', /NO AUTO UNDO/],
+      ['set transaction ignore limbo', /IGNORE LIMBO/],
+      ['set transaction read committed read consistency', /READ CONSISTENCY/],
+      ['set transaction snapshot at number 123', /SNAPSHOT AT NUMBER/],
+      ['set transaction lock wait 5', /LOCK/],
+      ['set transaction bogus', /BOGUS/],
+    ];
+    for (const [sql, re] of cases) {
+      const r = cc(sql) as ClientCommand & { op: 'unsupported' };
+      expect(r.op, sql).toBe('unsupported');
+      expect(r.reason, sql).toMatch(re);
+    }
+  });
+
+  it('returns null for ordinary DSQL — including strings that contain command words', () => {
+    expect(cc('select 1 from rdb$database')).toBeNull();
+    expect(cc("insert into log values ('commit')")).toBeNull();
+    expect(cc('set generator g to 1')).toBeNull();
+    expect(cc('set statistics index idx')).toBeNull();
+  });
+
+  it('parseScript attaches the client field iff kind === client', () => {
+    const [a, b, c] = parseScript("commit; insert into t values (1); set transaction read only");
+    expect(a!.kind).toBe('client');
+    expect(a!.client).toEqual({ op: 'commit', retain: false });
+    expect(b!.kind).toBe('dml');
+    expect(b!.client).toBeUndefined();
+    expect(c!.kind).toBe('client');
+    expect(c!.client).toMatchObject({ op: 'setTransaction', options: { readOnly: true } });
   });
 });
 

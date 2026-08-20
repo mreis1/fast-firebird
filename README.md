@@ -84,7 +84,7 @@ transaction scoping, the statement-cache metadata-pinning caveat), and the
 - **Blobs** — eager or lazy (per subtype, per column), 64KB segments with cross-blob pipelining, partial reads (`head()`) with resume, streaming reads/writes, read-ahead for streams, batch prefetch, `toFile()`, FB5/FB6 inline blobs (small blobs cost zero round trips)
 - **Types** — every scalar type including DECFLOAT(16/34), INT128, and zone-preserving `ZonedDate`
 - **Transactions** — isolation/read-only/lock-wait options, connection-wide `defaultTransaction`, `restart()`, nested transactions via savepoints, opt-in RO→RW auto-upgrade, `await using` support
-- **Ecosystem** — connection pool, `POST_EVENT` listener, Services API (server info, gstat, gbak backup/restore, nbackup incremental backup/restore), isql-faithful script parser, Drizzle ORM adapter (with nested transactions, plain-SQL migrator, RDB$ introspection → schema codegen), legacy `CHARSET NONE` transcoding toolkit
+- **Ecosystem** — connection pool, `POST_EVENT` listener, Services API (server info, gstat, gbak backup/restore, nbackup incremental backup/restore), isql-faithful script runner (client commands processed driver-side: `COMMIT`/`ROLLBACK`, `SET TRANSACTION`, `SET AUTODDL`, `RECONNECT`), Drizzle ORM adapter (with nested transactions, plain-SQL migrator, RDB$ introspection → schema codegen), legacy `CHARSET NONE` transcoding toolkit
 
 ## Queries
 
@@ -639,8 +639,20 @@ comments, with line/column error positions. `executeScript` supports
 plus `transactionOptions` for the modes that open one, `continueOnError`
 (failed statements carry `gdsCode`/`sqlState` for retry-vs-stop
 classification), and an `onProgress` callback. `parseScript(sql)` is also
-exported standalone; each statement carries a `kind: 'ddl' | 'dml' | 'other'`
-leading-keyword hint for commit-after-DDL policies.
+exported standalone; each statement carries a
+`kind: 'ddl' | 'dml' | 'other' | 'client'` leading-keyword hint for
+commit-after-DDL policies.
+
+Client-side script commands are processed driver-side, isql-style —
+`COMMIT`/`ROLLBACK` `[RETAIN]` checkpoint the script's transaction,
+`SET TRANSACTION …` maps onto `TransactionOptions`, `SET AUTODDL ON` commits
+after each DDL statement, and `RECONNECT` re-attaches via the new
+`Attachment.reconnect()` (same object; pools keep working). Transaction
+control is **never** forwarded to the server — a server-executed `COMMIT`
+would silently desync the script's transaction — and unmappable
+`SET TRANSACTION` clauses are rejected by name. See the
+[scripts guide](https://mreis1.github.io/fast-firebird/guide/scripts.html)
+for the per-mode semantics table.
 
 ## Events (POST_EVENT)
 

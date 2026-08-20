@@ -42,10 +42,72 @@ await tx.commit(); // or rollback — the script never finishes YOUR tx
 
 `parseScript(sql)` is also exported standalone if you only want the
 statement-splitting. Each `ParsedStatement` carries `sql`, `line`/`column`,
-and `kind: 'ddl' | 'dml' | 'other'` — a leading-keyword heuristic
-(`EXECUTE BLOCK` is 'other'; it can hide DDL) that makes commit-after-DDL
-policies (Delphi `AutoDDL` style) easy to build on `parseScript` +
-`classifyStatement(sql)`.
+and `kind: 'ddl' | 'dml' | 'other' | 'client'` — ddl/dml/other is a
+leading-keyword heuristic (`EXECUTE BLOCK` is 'other'; it can hide DDL) that
+makes commit-after-DDL policies easy to build; 'client' marks the
+client-side commands below (exact, with the parsed command in
+`statement.client`).
+
+## Client commands
+
+Installer/migration scripts written for isql or IBExpert contain commands
+that were never meant for the server: `COMMIT;` between DDL blocks,
+`RECONNECT;` to refresh metadata, `SET AUTODDL ON;`. `executeScript`
+processes these driver-side, the way an interactive tool does:
+
+| Command | `perScript` (default) | `perStatement` / `'none'` | caller `Transaction` |
+|---|---|---|---|
+| `COMMIT` / `ROLLBACK` `[WORK]` | Finish the script's transaction and open a fresh one — script-controlled checkpoints | No-op success (statements already autocommit) | Error |
+| `COMMIT` / `ROLLBACK` `RETAIN` | `commitRetaining()` / `rollbackRetaining()` | No-op success | Error |
+| `SET TRANSACTION <options>` | Restart with the mapped `TransactionOptions` (the current transaction must be clean — `COMMIT`/`ROLLBACK` first); becomes the template for later reopens | `perStatement`: options for subsequent statements; `'none'`: error (that's `defaultTransaction`'s job) | Error |
+| `RECONNECT` | Commit, then re-attach on the same `Attachment`, then a fresh transaction | Re-attach between statements | Error |
+| `SET AUTODDL ON|OFF` | Commit + reopen after each `kind: 'ddl'` statement | No-op success | Error |
+
+```ts
+await db.executeScript(`
+  create table cfg (k varchar(30), v varchar(100));
+  commit;                       -- checkpoint: cfg survives later failures
+  set transaction read committed record_version;
+  insert into cfg values ('mode', 'fast');
+`);
+```
+
+Two rules hold regardless of options:
+
+- **Transaction control never crosses the wire.** `COMMIT`, `ROLLBACK` and
+  `SET TRANSACTION` are valid server DSQL — executed server-side they would
+  silently finish the transaction the executor manages underneath it. So a
+  statement whose head is transaction control is either processed or
+  rejected with a named error; a `SET TRANSACTION` variant the driver cannot
+  map (`RESERVING …`, `NO AUTO UNDO`, `IGNORE LIMBO`, `READ CONSISTENCY`) is
+  rejected by clause name, never forwarded.
+- **Savepoints stay server-side.** `SAVEPOINT x`, `RELEASE SAVEPOINT x` and
+  `ROLLBACK TO [SAVEPOINT] x` operate safely *inside* the current
+  transaction and go to the server as normal DSQL.
+
+Every processed command still yields a `StatementResult` (with
+`statement.client` describing what ran) and fires `onProgress`;
+`continueOnError` applies to client-command failures like any other
+statement. Set `clientCommands: 'error'` to reject them all instead
+(strict-DSQL scripts). With a caller-supplied `Transaction` every client
+command is an error — the executor never finishes, replaces, or reconnects
+what the caller owns.
+
+`SET TRANSACTION` maps grammar-faithfully: bare `READ COMMITTED` means **no**
+record version (append `RECORD_VERSION` — or FB4+'s `VERSION` — for
+`isolation: 'readCommitted'`), `SNAPSHOT TABLE [STABILITY]` is
+`'serializable'`, `LOCK TIMEOUT n` is `wait: n`, and `AUTO COMMIT` is
+`autoCommit: true`. Unspecified clauses fall back to the connection's
+`defaultTransaction`, like every other transaction the driver starts.
+
+### `Attachment.reconnect()`
+
+`RECONNECT` is powered by a general API: re-attach to the database on the
+same `Attachment` object (pools and long-lived references keep working; also
+useful to retry after a network drop). Everything created before the
+reconnect — `Transaction`s, `PreparedStatement`s, lazy blob handles, event
+listeners — throws a clear "attachment was reconnected" error when used;
+`roundTrips` keeps counting cumulatively; the statement cache starts fresh.
 
 ## Comment-aware preprocessing
 

@@ -146,9 +146,18 @@ export class EventChannel {
     if (t) await t.endGracefully();
   }
 
-  /** Force-close the whole channel (used on attachment disconnect). */
-  closeAll(): void {
+  /** Force-close the whole channel (used on attachment disconnect/reconnect). */
+  closeAll(reason?: Error): void {
     this.closed = true;
+    if (reason) {
+      for (const l of this.subs.values()) {
+        try {
+          l.emit('error', reason);
+        } catch {
+          // No 'error' handler on this listener — closing is all that matters.
+        }
+      }
+    }
     this.subs.clear();
     void this.transport?.endGracefully();
     this.transport = null;

@@ -16,6 +16,8 @@ import type { Transaction } from './transaction.js';
  */
 export class PreparedStatement {
   private closed = false;
+  /** Attachment generation at prepare — a reconnect kills the server handle. */
+  private readonly attGeneration: number;
 
   /** @internal */
   constructor(
@@ -24,7 +26,9 @@ export class PreparedStatement {
     readonly sql: string,
     /** `@name` markers in `?` order — empty for a positional statement. */
     private readonly paramNames: string[] = [],
-  ) {}
+  ) {
+    this.attGeneration = att.generation;
+  }
 
   /**
    * Reorder a named-params object to positional, or pass an array through.
@@ -52,6 +56,11 @@ export class PreparedStatement {
 
   private assertOpen(): void {
     if (this.closed) throw new Error(`Prepared statement already closed: ${this.sql}`);
+    if (this.att.generation !== this.attGeneration) {
+      throw new Error(
+        `Prepared statement is no longer valid: the attachment was reconnected — prepare it again: ${this.sql}`,
+      );
+    }
   }
 
   /** Run inside an explicit transaction, or a one-shot one when omitted. */
@@ -147,6 +156,8 @@ export class PreparedStatement {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    // After a reconnect the server handle died with the old connection.
+    if (this.att.generation !== this.attGeneration) return;
     await this.att.withLock(async () => {
       freeStatement(this.att.session.wire, this.info.handle, FreeStatement.DSQL_drop);
     });

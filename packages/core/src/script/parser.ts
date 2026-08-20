@@ -12,15 +12,33 @@
  * the public `commentRanges`/`stripComments` helpers.
  */
 import { regionAt, UNTERMINATED_MESSAGE } from './scanner.js';
+import type { TransactionOptions } from '../protocol/transaction.js';
 
 /**
- * Statement classification from the leading keyword(s). A HEURISTIC: it
- * cannot see through `EXECUTE BLOCK` bodies (which can hide DDL via
- * `EXECUTE STATEMENT`) — those classify as 'other'. Intended for
- * commit-after-DDL policies (Delphi `AutoDDL` style), not as a security
- * boundary.
+ * Statement classification from the leading keyword(s). A HEURISTIC for
+ * 'ddl'/'dml'/'other': it cannot see through `EXECUTE BLOCK` bodies (which
+ * can hide DDL via `EXECUTE STATEMENT`) — those classify as 'other'.
+ * Intended for commit-after-DDL policies (Delphi `AutoDDL` style), not as a
+ * security boundary. 'client' is EXACT, not heuristic: the statement is a
+ * client-side command (see `ClientCommand`) that `executeScript` processes
+ * driver-side and never sends to the server.
  */
-export type StatementKind = 'ddl' | 'dml' | 'other';
+export type StatementKind = 'ddl' | 'dml' | 'other' | 'client';
+
+/**
+ * A script statement that is a client-side command — executed by the driver
+ * (isql-style), never sent to the server as DSQL. `op: 'unsupported'` marks a
+ * statement whose HEAD is transaction control (so it must not reach the
+ * server) but whose details the driver cannot process — `executeScript`
+ * rejects it with `reason`.
+ */
+export type ClientCommand =
+  | { op: 'reconnect' }
+  | { op: 'commit'; retain: boolean }
+  | { op: 'rollback'; retain: boolean }
+  | { op: 'setTransaction'; options: TransactionOptions; raw: string }
+  | { op: 'setAutoDdl'; on: boolean }
+  | { op: 'unsupported'; reason: string };
 
 export interface ParsedStatement {
   /** Statement text, trimmed, with the trailing terminator removed. */
@@ -31,6 +49,8 @@ export interface ParsedStatement {
   column: number;
   /** Leading-keyword classification (see StatementKind — a heuristic). */
   kind: StatementKind;
+  /** The recognized client command — set iff `kind === 'client'`. */
+  client?: ClientCommand;
 }
 
 export interface ParseScriptOptions {
@@ -111,8 +131,164 @@ export function stripComments(sql: string): string {
 
 const SET_TERM_RE = /^set\s+term\b/i;
 
+/**
+ * Recognize a client-side script command (isql-style). Returns `null` for
+ * anything that should go to the server as DSQL — including `SAVEPOINT x`,
+ * `RELEASE SAVEPOINT x` and `ROLLBACK [WORK] TO [SAVEPOINT] x`, which operate
+ * safely INSIDE the current transaction. Comment-tolerant, case-insensitive.
+ * Recognition keys on the statement head: once the head is transaction
+ * control (`COMMIT`/`ROLLBACK`/`SET TRANSACTION`), the statement is claimed
+ * as a client command even when its details cannot be processed — it comes
+ * back as `op: 'unsupported'` instead of `null`, so `executeScript` rejects
+ * it by name rather than letting it slip to the server.
+ */
+export function classifyClientCommand(sql: string): ClientCommand | null {
+  let stripped: string;
+  try {
+    stripped = stripComments(sql);
+  } catch {
+    return null; // malformed input cannot be a valid client command
+  }
+  // Keywords, integers, or any other non-space char (which then fails the
+  // keyword matches below — quotes/punctuation make a statement non-client).
+  const tokens = stripped.replace(/;+\s*$/, '').toLowerCase().match(/[a-z$_][\w$]*|\d+|\S/g) ?? [];
+  const [w1, w2] = tokens;
+  switch (w1) {
+    case 'reconnect':
+      return tokens.length === 1 ? { op: 'reconnect' } : null;
+    case 'commit':
+    case 'rollback': {
+      // Grammar (parse.y): COMMIT|ROLLBACK [WORK] [RETAIN [SNAPSHOT]];
+      // ROLLBACK [WORK] TO [SAVEPOINT] name is server-side DSQL.
+      let i = 1;
+      if (tokens[i] === 'work') i++;
+      if (w1 === 'rollback' && tokens[i] === 'to') return null;
+      let retain = false;
+      if (tokens[i] === 'retain') {
+        retain = true;
+        i++;
+        if (tokens[i] === 'snapshot') i++;
+      }
+      if (i < tokens.length) {
+        return {
+          op: 'unsupported',
+          reason: `${w1.toUpperCase()}: unexpected "${tokens[i]!.toUpperCase()}" — expected [WORK] [RETAIN [SNAPSHOT]]`,
+        };
+      }
+      return { op: w1, retain };
+    }
+    case 'set':
+      if (w2 === 'transaction') return parseSetTransaction(tokens.slice(2), sql);
+      if (w2 === 'autoddl' || w2 === 'auto') {
+        const arg = tokens[2];
+        if (tokens.length === 3 && (arg === 'on' || arg === 'off')) return { op: 'setAutoDdl', on: arg === 'on' };
+        return {
+          op: 'unsupported',
+          reason: 'SET AUTODDL requires an explicit ON or OFF (the bare isql toggle depends on invisible state)',
+        };
+      }
+      return null;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Map `SET TRANSACTION` clauses (already tokenized, head consumed) onto
+ * `TransactionOptions`. Clause set verified against parse.y `tran_option` /
+ * `iso_mode` / `version_mode`. Anything the driver cannot express —
+ * RESERVING, NO AUTO UNDO, IGNORE LIMBO, READ CONSISTENCY, SNAPSHOT AT
+ * NUMBER, … — yields `op: 'unsupported'` (named), never a silent drop.
+ */
+function parseSetTransaction(tokens: string[], raw: string): ClientCommand {
+  const unsupported = (clause: string): ClientCommand => ({
+    op: 'unsupported',
+    reason: `SET TRANSACTION: unsupported clause ${clause} — the driver cannot map it to TransactionOptions`,
+  });
+  const options: TransactionOptions = {};
+  let i = 0;
+  while (i < tokens.length) {
+    const t = tokens[i++]!;
+    switch (t) {
+      case 'read': {
+        const t2 = tokens[i++];
+        if (t2 === 'write') options.readOnly = false;
+        else if (t2 === 'only') options.readOnly = true;
+        else if (t2 === 'committed' || t2 === 'uncommitted') {
+          // Bare READ COMMITTED = NO record version (parse.y version_mode
+          // default); VERSION / NO VERSION / READ CONSISTENCY may follow and
+          // are handled by later loop iterations.
+          options.isolation = 'readCommittedNoRecVersion';
+        } else if (t2 === 'consistency') return unsupported('READ CONSISTENCY');
+        else return unsupported(`READ ${(t2 ?? '<end>').toUpperCase()}`);
+        break;
+      }
+      case 'wait':
+        options.wait = true;
+        break;
+      case 'no': {
+        const t2 = tokens[i++];
+        if (t2 === 'wait') options.wait = false;
+        else if (t2 === 'version' || t2 === 'record_version') options.isolation = 'readCommittedNoRecVersion';
+        else if (t2 === 'auto') return unsupported('NO AUTO UNDO');
+        else return unsupported(`NO ${(t2 ?? '<end>').toUpperCase()}`);
+        break;
+      }
+      case 'version': // FB4+ spelling
+      case 'record_version': // classic spelling
+        options.isolation = 'readCommitted';
+        break;
+      case 'isolation':
+        if (tokens[i] === 'level') i++;
+        break;
+      case 'snapshot':
+        if (tokens[i] === 'table') {
+          i++;
+          if (tokens[i] === 'stability') i++;
+          options.isolation = 'serializable';
+        } else if (tokens[i] === 'at') {
+          return unsupported('SNAPSHOT AT NUMBER (shared snapshots)');
+        } else {
+          options.isolation = 'snapshot';
+        }
+        break;
+      case 'lock':
+        if (tokens[i] === 'timeout' && /^\d+$/.test(tokens[i + 1] ?? '')) {
+          options.wait = Number(tokens[i + 1]);
+          i += 2;
+        } else {
+          return unsupported('LOCK (expected LOCK TIMEOUT <seconds>)');
+        }
+        break;
+      case 'auto':
+        if (tokens[i] === 'commit') {
+          options.autoCommit = true;
+          i++;
+        } else {
+          return unsupported('AUTO RELEASE TEMP BLOBID');
+        }
+        break;
+      case 'reserving':
+        return unsupported('RESERVING (table reservation)');
+      case 'ignore':
+        return unsupported('IGNORE LIMBO');
+      case 'restart':
+        return unsupported('RESTART REQUESTS');
+      default:
+        return unsupported(`starting at "${t.toUpperCase()}"`);
+    }
+  }
+  return { op: 'setTransaction', options, raw };
+}
+
 /** Classify a statement by its leading keyword(s). Exported for reuse. */
 export function classifyStatement(sql: string): StatementKind {
+  if (classifyClientCommand(sql) !== null) return 'client';
+  return classifyServerStatement(sql);
+}
+
+/** The ddl/dml/other heuristic for statements that go to the server. */
+function classifyServerStatement(sql: string): StatementKind {
   // Comments may sit between the keywords; strip them from the head before
   // tokenizing (also handles a block comment cut off by the slice).
   const head = sql.slice(0, 400).replace(/--[^\n]*|\/\*[\s\S]*?(\*\/|$)/g, ' ');
@@ -129,7 +305,7 @@ export function classifyStatement(sql: string): StatementKind {
     case 'declare': // DECLARE FILTER / DECLARE EXTERNAL FUNCTION
       return 'ddl';
     case 'set':
-      return w2 === 'generator' ? 'ddl' : 'other'; // SET TRANSACTION/STATISTICS… = other
+      return w2 === 'generator' ? 'ddl' : 'other'; // SET STATISTICS/BIND… = other
     case 'insert':
     case 'update': // incl. UPDATE OR INSERT
     case 'delete':
@@ -138,7 +314,7 @@ export function classifyStatement(sql: string): StatementKind {
     case 'execute':
       return w2 === 'procedure' ? 'dml' : 'other'; // EXECUTE BLOCK = other
     default:
-      return 'other'; // SELECT, COMMIT, ROLLBACK, CONNECT, …
+      return 'other'; // SELECT, SAVEPOINT, CONNECT, ROLLBACK TO SAVEPOINT, …
   }
 }
 
@@ -210,7 +386,14 @@ export function parseScript(script: string, options: ParseScriptOptions = {}): P
     if (sawContent) {
       const rawEnd = terminated ? i - terminator.length : i;
       const sql = script.slice(startIndex, rawEnd).trim();
-      if (sql.length > 0) statements.push({ sql, line: startLine, column: startCol, kind: classifyStatement(sql) });
+      if (sql.length > 0) {
+        const client = classifyClientCommand(sql);
+        statements.push(
+          client
+            ? { sql, line: startLine, column: startCol, kind: 'client', client }
+            : { sql, line: startLine, column: startCol, kind: classifyServerStatement(sql) },
+        );
+      }
     }
   }
 

@@ -31,15 +31,58 @@ export class Attachment {
   private eventChannel: EventChannel | null = null;
   /** Serializes wire operations — one logical op at a time per connection. */
   private opChain: Promise<unknown> = Promise.resolve();
-  /** @internal */
-  readonly session: SessionContext;
+  /** Bumped by `reconnect()` — objects born before it refuse to run. */
+  private currentGeneration = 0;
+  /** Round trips accumulated on wires retired by `reconnect()`. */
+  private roundTripsBase = 0;
+  private currentWire: WireConnection;
+  private currentHandshake: HandshakeResult;
+  private currentDbHandle: number;
+  private currentSession: SessionContext;
 
   private constructor(
-    readonly wire: WireConnection,
+    wire: WireConnection,
     readonly options: ResolvedOptions,
-    readonly handshake: HandshakeResult,
-    readonly dbHandle: number,
+    handshake: HandshakeResult,
+    dbHandle: number,
   ) {
+    this.currentWire = wire;
+    this.currentHandshake = handshake;
+    this.currentDbHandle = dbHandle;
+    this.currentSession = this.buildSession();
+  }
+
+  /** Wire connection currently in use (swapped by `reconnect()`). */
+  get wire(): WireConnection {
+    return this.currentWire;
+  }
+
+  /** Handshake of the current wire connection. */
+  get handshake(): HandshakeResult {
+    return this.currentHandshake;
+  }
+
+  /** Server-side database handle on the current connection. */
+  get dbHandle(): number {
+    return this.currentDbHandle;
+  }
+
+  /** @internal */
+  get session(): SessionContext {
+    return this.currentSession;
+  }
+
+  /**
+   * Reconnect epoch: 0 until the first `reconnect()`, +1 per reconnect.
+   * Transactions, prepared statements and lazy blobs remember the generation
+   * they were created in and throw once it moves past them.
+   */
+  get generation(): number {
+    return this.currentGeneration;
+  }
+
+  private buildSession(): SessionContext {
+    const { currentWire: wire, options, currentHandshake: handshake } = this;
     // FB 5.0.2+ inline blobs (protocol ≥ 19): announce the size in every
     // op_execute, and route incoming op_inline_blob packets to a tx-scoped
     // cache that blob reads consult first (zero round trips on a hit).
@@ -49,9 +92,9 @@ export class Attachment {
       wire.inlineBlobSize = options.maxInlineBlobSize;
       wire.onInlineBlob = (txId, blobId, _info, data) => inline!.store(txId, blobId, data);
     }
-    this.session = {
+    return {
       wire,
-      dbHandle,
+      dbHandle: this.currentDbHandle,
       opts: options,
       cache: options.statementCacheSize > 0 ? new StatementCache(wire, options.statementCacheSize) : null,
       lock: (fn) => this.withLock(fn),
@@ -61,10 +104,11 @@ export class Attachment {
 
   /**
    * Packet flushes performed on this connection so far (≈ round trips).
-   * Useful for performance assertions and diagnostics.
+   * Cumulative across `reconnect()`. Useful for performance assertions and
+   * diagnostics.
    */
   get roundTrips(): number {
-    return this.wire.flushCount;
+    return this.roundTripsBase + this.currentWire.flushCount;
   }
 
   /** @internal */
@@ -76,6 +120,15 @@ export class Attachment {
 
   static async open(raw: ConnectInput, mode: 'attach' | 'create' = 'attach'): Promise<Attachment> {
     const opts = resolveOptions(raw);
+    const { wire, hs, handle } = await Attachment.establish(opts, mode);
+    return new Attachment(wire, opts, hs, handle);
+  }
+
+  /** Connect + handshake + attach/create from already-resolved options. */
+  private static async establish(
+    opts: ResolvedOptions,
+    mode: 'attach' | 'create',
+  ): Promise<{ wire: WireConnection; hs: HandshakeResult; handle: number }> {
     const transport = await Transport.connect({
       host: opts.host,
       port: opts.port,
@@ -86,32 +139,63 @@ export class Attachment {
       // The connect deadline must cover the handshake + attach, not just the
       // TCP connect: a loaded server can accept the socket then stall on its
       // responses, which would otherwise hang the read forever.
-      const handle = await withTimeout(
-        opts.connectTimeoutMs,
-        `Handshake/attach to ${opts.host}:${opts.port}`,
-        async () => {
-          const hs = await performHandshake(wire, {
-            database: opts.database,
-            user: opts.user,
-            password: opts.password,
-            wireCrypt: opts.wireCrypt,
-            wireCompression: opts.wireCompression,
-            wireCryptPlugin: opts.wireCryptPlugin,
-            authPlugin: opts.authPlugin,
-            srpSeed: opts.srpSeed,
-          });
-          const h =
-            mode === 'create'
-              ? await createDatabase(wire, opts, hs.dpbAuthData, hs.pendingAuth)
-              : await attachDatabase(wire, opts, hs.dpbAuthData, hs.pendingAuth);
-          return { hs, h };
-        },
-      );
-      return new Attachment(wire, opts, handle.hs, handle.h);
+      return await withTimeout(opts.connectTimeoutMs, `Handshake/attach to ${opts.host}:${opts.port}`, async () => {
+        const hs = await performHandshake(wire, {
+          database: opts.database,
+          user: opts.user,
+          password: opts.password,
+          wireCrypt: opts.wireCrypt,
+          wireCompression: opts.wireCompression,
+          wireCryptPlugin: opts.wireCryptPlugin,
+          authPlugin: opts.authPlugin,
+          srpSeed: opts.srpSeed,
+        });
+        const handle =
+          mode === 'create'
+            ? await createDatabase(wire, opts, hs.dpbAuthData, hs.pendingAuth)
+            : await attachDatabase(wire, opts, hs.dpbAuthData, hs.pendingAuth);
+        return { wire, hs, handle };
+      });
     } catch (err) {
       wire.close();
       throw err;
     }
+  }
+
+  /**
+   * Tear down the wire connection and re-attach to the same database with the
+   * same options — on the SAME `Attachment` object, so every holder of the
+   * reference (a pool, a script executor) keeps working. Everything created
+   * before the reconnect is dead: `Transaction`s, `PreparedStatement`s, lazy
+   * `Blob` handles and event listeners throw a clear "attachment was
+   * reconnected" error when used (event listeners get an `'error'` event).
+   * The statement cache and inline-blob cache start fresh; `roundTrips`
+   * keeps counting cumulatively.
+   *
+   * If establishing the new connection fails, the attachment is left closed
+   * (`isAlive` is false) but not detached — `reconnect()` can be retried.
+   */
+  async reconnect(): Promise<void> {
+    if (this.detached) throw new Error('Attachment already closed');
+    await this.withLock(async () => {
+      this.currentGeneration++;
+      this.eventChannel?.closeAll(new Error('attachment was reconnected — event subscriptions are closed'));
+      this.eventChannel = null;
+      this.currentSession.inline?.clear();
+      this.roundTripsBase += this.currentWire.flushCount;
+      try {
+        await detachDatabase(this.currentWire);
+      } catch {
+        // Connection already dead — reconnecting is exactly the cure.
+      } finally {
+        this.currentWire.close();
+      }
+      const { wire, hs, handle } = await Attachment.establish(this.options, 'attach');
+      this.currentWire = wire;
+      this.currentHandshake = hs;
+      this.currentDbHandle = handle;
+      this.currentSession = this.buildSession();
+    });
   }
 
   /** Negotiated protocol version (13 = FB3 … 16 = FB4/5). */

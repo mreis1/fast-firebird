@@ -186,12 +186,13 @@ only when API surface stabilizes (avoid premature package fragmentation).
 
 ## Deferred backlog (explicitly parked, in rough priority order)
 
-0a. **Script client-commands** — see `plans/script-client-commands.md`
-   (planned 2026-08-19): executeScript processes RECONNECT / COMMIT /
-   ROLLBACK / SET TRANSACTION / SET AUTODDL driver-side instead of shipping
-   them to the server (COMMIT-as-DSQL currently desyncs the executor — bug
-   fix, process-by-default). Prerequisite: `Attachment.reconnect()`.
-   Absorbs parked B2 (autoDdl).
+0a. ~~**Script client-commands**~~ — **SHIPPED 2026-08-20** (phases 1+2 of
+   `plans/script-client-commands.md`): executeScript processes RECONNECT /
+   COMMIT / ROLLBACK [RETAIN] / SET TRANSACTION / SET AUTODDL driver-side,
+   with the unconditional wire guard (transaction control never crosses the
+   wire). `Attachment.reconnect()` shipped as a general API. Closed parked
+   B2 (autoDdl). Remaining phase 3 (decide-only): `onClientCommand` hook,
+   EXIT/QUIT, READ CONSISTENCY isolation level.
 
 0. **Script-runner field-report batch** — see `plans/script-runner-feedback.md`
    (triaged 2026-08-18): executeScript `transactionOptions` + caller-supplied
@@ -336,7 +337,31 @@ only when API surface stabilizes (avoid premature package fragmentation).
   breakage (see backlog #15).
 - Regression: `CHARSET NONE` + win1252 round-trips (€, smart quotes, em dash).
 
-## Current status (2026-08-19, session 47)
+## Current status (2026-08-20, session 48)
+Script client-commands SHIPPED (phases 1+2 of
+`plans/script-client-commands.md` in one session): (1) `Attachment.reconnect()`
+— re-attach on the same object (readonly→getter mutability refactor, shared
+`establish()` with `open()`, attachment generation counter invalidating
+pre-reconnect Transactions/PreparedStatements/lazy blobs with clear
+"attachment was reconnected" errors, event listeners get an `'error'`,
+cumulative `roundTrips`, pool-safe); (2) parser `classifyClientCommand` +
+`kind: 'client'` + `ParsedStatement.client` — total recognizer, head-match =
+ours-never-wire, `op: 'unsupported'` carries named rejections; SET
+TRANSACTION mapping verified against parse.y (bare READ COMMITTED = NO rec
+version — plan table corrected; AUTO COMMIT → autoCommit; VERSION and
+RECORD_VERSION spellings); (3) executor `clientCommands: 'process'|'error'`
+(default process) + full per-mode dispatch (perScript checkpoints /
+COMMIT-RETAIN / dirty-SET TRANSACTION rule / RECONNECT commits-then-reattaches
+/ AUTODDL commit-after-DDL; perStatement+none no-ops; caller-tx always
+errors) + unconditional wire guard. Demo app gained a Script runner panel
+(textarea + tx-mode/clientCommands/continueOnError controls, per-statement
+trace table, 5 showcase examples, client-commands reference) over a new
+`/api/servers/:id/script` endpoint on a dedicated attachment. Docs: scripts
+guide "Client commands" section + README. Suite 1357 → 1453 (63-test parser
+unit matrix, 21 reconnect + 60 client-command integration tests), green on
+FB3/4/5/6.
+
+## Previous status (2026-08-19, session 47)
 Script-runner feedback plan executed end-to-end (all four batches of
 `plans/script-runner-feedback.md`, one commit per session): (1) executeScript
 `transactionOptions` + caller-supplied `Transaction` (script composes

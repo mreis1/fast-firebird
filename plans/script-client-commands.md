@@ -70,9 +70,10 @@ isql/DSQL clause → `TransactionOptions`:
 | `LOCK TIMEOUT n` | `wait: n` |
 | `ISOLATION LEVEL SNAPSHOT` (or bare `SNAPSHOT`) | `isolation: 'snapshot'` |
 | `SNAPSHOT TABLE [STABILITY]` | `isolation: 'serializable'` |
-| `READ COMMITTED [RECORD_VERSION]` | `isolation: 'readCommitted'` |
-| `READ COMMITTED NO RECORD_VERSION` | `isolation: 'readCommittedNoRecVersion'` |
-| `NO AUTO UNDO`, `IGNORE LIMBO`, `RESERVING …`, `READ CONSISTENCY` | **error** with a clear message (unsupported clause named) — no silent dropping |
+| `READ COMMITTED RECORD_VERSION` (FB4+ spelling: `VERSION`) | `isolation: 'readCommitted'` |
+| bare `READ COMMITTED`, or `… NO RECORD_VERSION`/`NO VERSION` | `isolation: 'readCommittedNoRecVersion'` — **grammar-faithful** (parse.y `version_mode` defaults to NO rec version; an earlier draft of this table mapped bare READ COMMITTED to rec_version — corrected 2026-08-20 during implementation) |
+| `AUTO COMMIT` | `autoCommit: true` (real grammar, parse.y `tran_option`) |
+| `NO AUTO UNDO`, `IGNORE LIMBO`, `RESERVING …`, `READ CONSISTENCY`, `SNAPSHOT AT NUMBER n`, `RESTART REQUESTS`, `AUTO RELEASE TEMP BLOBID` | **error** with a clear message (unsupported clause named) — no silent dropping |
 
 `READ COMMITTED READ CONSISTENCY` (FB4+) is a candidate for a new
 `IsolationLevel` (`isc_tpb_read_consistency` = 22) — separate decision,
@@ -184,24 +185,24 @@ This is independently valuable (retry-after-network-drop; the nf2-ext swap's
 
 ## Phasing
 
-### Phase 1 ☐ — recognizer + transaction control + RECONNECT
-1. `Attachment.reconnect()` (mutability refactor, generation guard, tests:
-   `CURRENT_CONNECTION` changes, old handles throw clearly, pool-safe).
-2. Parser: `classifyClientCommand`, `kind: 'client'`, `client` field
-   (unit matrix incl. `ROLLBACK TO SAVEPOINT` staying server-side,
-   comment-tolerance, case/WORK/RETAIN variants).
-3. Executor: `clientCommands` option + dispatch for
-   commit/rollback(/retain) + reconnect per the semantics table
-   (integration: checkpoint survives a later failing statement; rollback
-   discards; reconnect mid-script observable via `CURRENT_CONNECTION`;
-   caller-tx mode errors; perStatement no-ops).
+### Phase 1 ☑ — recognizer + transaction control + RECONNECT (2026-08-20)
+1. ☑ `Attachment.reconnect()` (mutability refactor — wire/handshake/dbHandle/
+   session are private mutable behind getters, shared `establish()` with
+   `open()`; generation guard on Transaction/PreparedStatement/lazy blobs;
+   event listeners get an `'error'` and the channel closes; cumulative
+   `roundTrips`; failed re-establish leaves the attachment retryable).
+2. ☑ Parser: `classifyClientCommand`, `kind: 'client'`, `client` field.
+   Implementation note: the recognizer is TOTAL — it never throws; an
+   unprocessable head-match comes back as `{ op: 'unsupported', reason }`
+   so the executor rejects it by name (this is how the wire guard composes
+   with `continueOnError`).
+3. ☑ Executor: `clientCommands` option + full dispatch + wire guard.
 
-### Phase 2 ☐ — SET TRANSACTION + AUTODDL (+ optionally EXIT/QUIT)
-4. `SET TRANSACTION` option parser + dirty-tx rule (integration: isolation
-   switch observable via `RDB$GET_CONTEXT('SYSTEM', 'ISOLATION_LEVEL')`,
-   NO WAIT observable via fast lock failure; unsupported clauses error).
-5. `SET AUTODDL ON` (integration: DDL committed even when a later DML in the
-   same script fails — the Delphi-installer scenario). Closes parked B2 in
+### Phase 2 ☑ — SET TRANSACTION + AUTODDL (2026-08-20, same session)
+4. ☑ `SET TRANSACTION` mapping (grammar-verified against parse.y, incl. the
+   bare-READ-COMMITTED correction above) + dirty-tx rule + named rejections.
+5. ☑ `SET AUTODDL ON|OFF` (perScript commit-after-DDL; no-op in autocommit
+   modes; bare toggle rejected — "use ON or OFF"). Closes parked B2 in
    `plans/script-runner-feedback.md`.
 
 ### Phase 3 ☐ — decide, don't build yet

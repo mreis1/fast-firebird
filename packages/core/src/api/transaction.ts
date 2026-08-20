@@ -36,6 +36,8 @@ export class Transaction {
   private wasAutoUpgraded = false;
   /** Current nested-savepoint depth (names reuse per depth: FF_SP_1, FF_SP_2 …). */
   private spDepth = 0;
+  /** Attachment generation at creation — a reconnect invalidates this tx. */
+  private readonly attGeneration: number;
 
   constructor(
     private readonly att: Attachment,
@@ -43,6 +45,7 @@ export class Transaction {
     private options: TransactionOptions,
   ) {
     this.currentHandle = handle;
+    this.attGeneration = att.generation;
   }
 
   /** Server-side transaction handle (changes across `restart`). */
@@ -59,14 +62,25 @@ export class Transaction {
     return this.wasAutoUpgraded;
   }
 
+  private assertSameAttachment(): void {
+    if (this.att.generation !== this.attGeneration) {
+      throw new Error('Transaction is no longer valid: the attachment was reconnected — start a new transaction');
+    }
+  }
+
   private assertActive(): void {
+    this.assertSameAttachment();
     if (this.finished) throw new Error('Transaction already committed or rolled back');
   }
 
   /** @internal Run context binding lazy-blob validity to this tx generation. */
   private runContext(options?: QueryOptions): RunContext {
     const gen = this.generation;
-    return { query: options ?? {}, txAlive: () => !this.finished && this.generation === gen && this.att.isAlive };
+    return {
+      query: options ?? {},
+      txAlive: () =>
+        !this.finished && this.generation === gen && this.att.generation === this.attGeneration && this.att.isAlive,
+    };
   }
 
   /** Run a statement and return its rows (`query<T>` types them). */
@@ -241,6 +255,7 @@ export class Transaction {
    * ```
    */
   async restart(options: RestartOptions = {}): Promise<void> {
+    this.assertSameAttachment();
     const action = options.action ?? 'commit';
     if (!this.finished) {
       await this.att.withLock(() =>
