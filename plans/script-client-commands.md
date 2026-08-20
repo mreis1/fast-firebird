@@ -80,11 +80,46 @@ tracked as an open question; until then it errors honestly.
 
 ### 3. Execution (executor layer — the dispatch)
 
-`ExecuteScriptOptions.clientCommands?: 'process' | 'error' | 'send'`
+`ExecuteScriptOptions.clientCommands?: 'process' | 'error'`
 - **`'process'` (default):** intercept and perform driver-side.
 - **`'error'`:** throw on the first client command (strict-DSQL scripts).
-- **`'send'`:** today's behavior — raw pass-through to the server (escape
-  hatch for anyone who depended on it).
+
+There is deliberately **no raw pass-through mode** (an earlier draft had
+`'send'`, dropped 2026-08-20): its only effect would be to reproduce the
+desync bug — a server-executed `COMMIT` kills the wrapper transaction under
+the executor, which no correct program can depend on — and it would be the
+one configuration that defeats the wire guard below.
+
+#### Wire guard — transaction control never crosses the wire
+
+Independent of the `clientCommands` setting and of the transaction mode,
+`executeScript` enforces one invariant as defense in depth: **a statement
+recognized as transaction-control (`COMMIT`/`ROLLBACK` heads except
+`ROLLBACK TO …`, and `SET TRANSACTION`) is NEVER transmitted to the
+server.** Every path either processes it or rejects it with a clear error —
+there is no fall-through to the wire:
+
+- `clientCommands: 'error'` → rejected (that's the mode's contract).
+- Caller-supplied `Transaction` mode → rejected ("the caller owns the
+  transaction"), never sent.
+- `SET TRANSACTION` in `'none'` mode → rejected, never sent.
+- A `SET TRANSACTION` whose clauses the mapper does not understand
+  (`RESERVING …`, `READ CONSISTENCY`, future syntax) → **rejected by name**,
+  never sent — an unparseable variant must not sneak to the server just
+  because the recognizer gave up. This is why the recognizer keys on the
+  statement HEAD (`commit` / `rollback` / `set transaction`) and only then
+  parses details: head match decides "ours, never wire"; detail parsing
+  decides "process vs. error".
+- `RECONNECT`/`SET AUTODDL` need no guard (the server rejects them as
+  unknown tokens anyway) but follow the same process-or-reject dispatch for
+  uniformity.
+
+Statements that are transaction-*related* but safe inside the current
+transaction (`SAVEPOINT x`, `RELEASE SAVEPOINT x`, `ROLLBACK TO [SAVEPOINT]
+x`) intentionally stay server-side — they cannot invalidate the executor's
+handle. `EXECUTE BLOCK` bodies cannot commit the attachment's transaction
+(PSQL has no COMMIT; autonomous transactions are their own handles), so they
+are not a vector.
 
 Dispatch per transaction mode — the core semantics table:
 
@@ -173,11 +208,15 @@ This is independently valuable (retry-after-network-drop; the nf2-ext swap's
 6. `onClientCommand` hook for tool-specific commands; `EXIT`/`QUIT`;
    `READ CONSISTENCY` isolation level.
 
-## Risks / decisions to confirm
+## Risks / decisions
 
-- **Default `'process'` changes behavior** for scripts containing `COMMIT`
-  (previously "worked" by hitting the server and desyncing the executor) —
-  defensible as a bug fix; release notes + `'send'` escape hatch.
+- ☑ **Default `'process'`, no `'send'` mode** — DECIDED 2026-08-20 (Marcio):
+  processing is a bug fix (a server-executed COMMIT desyncs the executor);
+  a raw pass-through would be the one config that defeats the wire guard,
+  and nothing correct can depend on the old behavior. Release-notes entry.
+- ☑ **Wire guard is unconditional** — DECIDED 2026-08-20 (Marcio):
+  transaction-control statements are processed or rejected, never
+  transmitted, regardless of options/mode.
 - **`kind` union widens** with `'client'` — semver-minor with a note.
 - **RECONNECT commits a dirty tx** (vs erroring or rolling back) — chosen to
   match installer expectations and isql's `EXIT`; confirm.
@@ -185,3 +224,8 @@ This is independently valuable (retry-after-network-drop; the nf2-ext swap's
   compatibility; confirm.
 - Docs to update: scripts guide (new "Client commands" section + semantics
   table), README scripts blurb, migration guide (isql compatibility matrix).
+- Open (out of executeScript scope, noted while securing this): a direct
+  `db.run('COMMIT')` / `tx.run('COMMIT')` has the same desync property at
+  the API level. A future hardening could reuse `classifyClientCommand` to
+  reject transaction-control DSQL in `run()` paths with a pointer to
+  `tx.commit()` — separate decision, not part of this plan's phases.
