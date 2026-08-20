@@ -9,8 +9,10 @@ import {
   type Engine,
   type Feature,
   type QueryResult,
+  type QueryTxOptions,
   type ScriptRunResult,
   type ScriptTxMode,
+  type TxIsolation,
   type ServerCfg,
   type ServerInfo,
   type TryResult,
@@ -480,11 +482,46 @@ function TxWaitPicker({ value, onChange, defaultLabel = 'default' }: { value: Tx
   );
 }
 
+/**
+ * Recognize lock/metadata-pin errors and explain the usual cause — instead of
+ * a bare server message (or, without a lock timeout, an endless wait).
+ */
+function lockHint(error: string | null | undefined): string | null {
+  if (!error) return null;
+  if (!/lock conflict|lock time-out|object .* in use|deadlock|update conflicts/i.test(error)) return null;
+  return 'Another connection holds a lock or pins this table’s metadata — cached prepared statements do this too ' +
+    '(the demo releases its own statement caches before scripts). In your code: Attachment.clearStatementCache() / ' +
+    'Pool.clearStatementCaches() before DDL, or use lock wait “no wait” / a timeout to fail fast instead of blocking.';
+}
+
+/** Isolation picker for the core lane (undefined = driver default: snapshot). */
+function IsolationPicker({ value, onChange }: { value: TxIsolation | undefined; onChange: (v: TxIsolation | undefined) => void }) {
+  return (
+    <span className="unit" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
+      isolation
+      <select
+        style={{ maxWidth: 190 }}
+        title="Isolation for the core lane's transaction. Driver default = snapshot (concurrency), read-write, wait forever."
+        value={value ?? ''}
+        onChange={(e) => onChange((e.target.value || undefined) as TxIsolation | undefined)}
+      >
+        <option value="">default (snapshot)</option>
+        <option value="snapshot">snapshot</option>
+        <option value="serializable">snapshot table stability</option>
+        <option value="readCommitted">read committed</option>
+        <option value="readCommittedNoRecVersion">read committed · no rec version</option>
+      </select>
+    </span>
+  );
+}
+
 function QueryPanel({ id }: { id: string }) {
   const [sql, setSql] = useState("select rdb$relation_name as name, rdb$relation_id as id\nfrom rdb$relations where rdb$system_flag = 0\norder by 1");
   const [paramsText, setParamsText] = useState('[]');
   const [engine, setEngine] = useState<Engine | 'all'>('all');
   const [txWait, setTxWait] = useState<TxWait>(undefined);
+  const [isolation, setIsolation] = useState<TxIsolation | undefined>(undefined);
+  const [readOnly, setReadOnly] = useState(false);
   const [results, setResults] = useState<QueryResult[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -503,7 +540,11 @@ function QueryPanel({ id }: { id: string }) {
     }
     try {
       const engines = engine === 'all' ? ENGINES : [engine];
-      const res = await Promise.all(engines.map((e) => api.query(id, e, sql, params, txWait)));
+      const txOptions: QueryTxOptions | undefined =
+        txWait !== undefined || isolation !== undefined || readOnly
+          ? { wait: txWait, isolation, ...(readOnly ? { readOnly } : {}) }
+          : undefined;
+      const res = await Promise.all(engines.map((e) => api.query(id, e, sql, params, txOptions)));
       setResults(res);
     } catch (e) {
       setErr(String((e as Error).message));
@@ -528,12 +569,19 @@ function QueryPanel({ id }: { id: string }) {
             </button>
           ))}
         </div>
+        <IsolationPicker value={isolation} onChange={setIsolation} />
+        <label className="unit" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}
+          title="READ ONLY transaction — writes fail with a clear error; cheapest mode for pure reads.">
+          <input type="checkbox" style={{ width: 'auto' }} checked={readOnly} onChange={(e) => setReadOnly(e.target.checked)} />
+          read only
+        </label>
         <TxWaitPicker value={txWait} onChange={setTxWait} />
         <button className="btn" onClick={run} disabled={busy}>
           {busy ? 'running…' : 'Run'}
         </button>
       </div>
       {err && <div className="err-text" style={{ marginTop: 10 }}>{err}</div>}
+      {(() => { const h = lockHint(err ?? results.find((r) => r.error)?.error); return h ? <div className="note">{h}</div> : null; })()}
 
       {results.length > 0 && (
         <div className="lanes" style={{ marginTop: 12, gridTemplateColumns: `repeat(${results.length}, 1fr)` }}>
@@ -622,6 +670,7 @@ function ScriptPanel({ id }: { id: string }) {
   const [txMode, setTxMode] = useState<ScriptTxMode>('perScript');
   const [clientCommands, setClientCommands] = useState<'process' | 'error'>('process');
   const [continueOnError, setContinueOnError] = useState(false);
+  const [lockWait, setLockWait] = useState<TxWait>(undefined); // server default: wait 10 s
   const [res, setRes] = useState<ScriptRunResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -631,7 +680,7 @@ function ScriptPanel({ id }: { id: string }) {
     setErr(null);
     setRes(null);
     try {
-      setRes(await api.script(id, script, txMode, clientCommands, continueOnError));
+      setRes(await api.script(id, script, txMode, clientCommands, continueOnError, lockWait));
     } catch (e) {
       setErr(String((e as Error).message));
     } finally {
@@ -689,11 +738,13 @@ function ScriptPanel({ id }: { id: string }) {
           <input type="checkbox" style={{ width: 'auto' }} checked={continueOnError} onChange={(e) => setContinueOnError(e.target.checked)} />
           continue on error
         </label>
+        {txMode !== 'none' && <TxWaitPicker value={lockWait} onChange={setLockWait} defaultLabel="wait 10 s" />}
         <button className="btn" onClick={run} disabled={busy}>
           {busy ? 'running…' : 'Run script'}
         </button>
       </div>
       {err && <div className="err-text" style={{ marginTop: 10 }}>{err}</div>}
+      {(() => { const h = lockHint(err ?? res?.error ?? res?.statements.find((s) => s.error)?.error); return h ? <div className="note">{h}</div> : null; })()}
       {res && (
         <>
           <div className="row mt" style={{ gap: 10 }}>
@@ -751,6 +802,9 @@ function ScriptPanel({ id }: { id: string }) {
           Unmappable clauses (<code>RESERVING</code>, <code>READ CONSISTENCY</code>, …) are rejected by name. Transaction control is{' '}
           <b>never</b> forwarded to the server — a server-executed COMMIT would desync the script's transaction. <code>SAVEPOINT</code>/
           <code>ROLLBACK TO</code> stay server-side. With a caller-supplied transaction (API only) every client command errors.
+          Anti-hang defaults in this demo: scripts run with <b>lock wait 10 s</b> (driver default is Firebird's wait-forever — change it
+          with the picker or a script <code>SET TRANSACTION … LOCK TIMEOUT n</code>), and the demo releases its own statement caches
+          (SQL-runner lanes) before each run so cached statements don't pin metadata against your DDL.
         </div>
       </details>
     </div>

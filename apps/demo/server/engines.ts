@@ -42,14 +42,25 @@ function serializeRows(rows: unknown[]): Record<string, unknown>[] {
   });
 }
 
+/** Per-query transaction options for the core lane (subset of core's TransactionOptions). */
+export interface QueryTxOptions {
+  isolation?: 'snapshot' | 'serializable' | 'readCommitted' | 'readCommittedNoRecVersion';
+  readOnly?: boolean;
+  /** true = wait, false = nowait, number = wait seconds. */
+  wait?: boolean | number;
+}
+
+const hasTxOptions = (o?: QueryTxOptions): boolean =>
+  !!o && (o.isolation !== undefined || o.readOnly !== undefined || o.wait !== undefined);
+
 /** Run the same SQL through one of the three stacks and time it. */
 export async function runQuery(
   state: ServerState,
   engine: Engine,
   sqlText: string,
   params: unknown[] = [],
-  /** Lock-wait mode: true = wait, false = nowait, number = wait seconds. Core lane only. */
-  txWait?: boolean | number,
+  /** Transaction options (isolation / access mode / lock wait). Core lane only. */
+  txOptions?: QueryTxOptions,
 ): Promise<QueryResult> {
   const t0 = performance.now();
   try {
@@ -57,15 +68,14 @@ export async function runQuery(
     let note: string | undefined;
 
     if (engine === 'core') {
-      rows =
-        txWait === undefined
-          ? await state.pool.use((att) => att.query(sqlText, params as never[]))
-          : await state.pool.use((att) => att.transaction((tx) => tx.query(sqlText, params as never[]), { wait: txWait }));
+      rows = hasTxOptions(txOptions)
+        ? await state.pool.use((att) => att.transaction((tx) => tx.query(sqlText, params as never[]), txOptions))
+        : await state.pool.use((att) => att.query(sqlText, params as never[]));
     } else if (engine === 'drizzle') {
       const res: any = await state.drizzle.execute(sql.raw(sqlText));
       rows = Array.isArray(res) ? res : (res?.rows ?? []);
       if (params.length) note = 'Drizzle lane runs raw SQL via db.execute(sql.raw(...)); params bind on the core/compat lanes.';
-      else if (txWait !== undefined) note = 'Lock-wait options apply on the core lane; drizzle/compat run their own transaction defaults.';
+      else if (hasTxOptions(txOptions)) note = 'Transaction options apply on the core lane; drizzle/compat run their own transaction defaults.';
     } else {
       const con = await state.ext.poolGet();
       try {

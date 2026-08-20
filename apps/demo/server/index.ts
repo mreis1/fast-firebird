@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { addServer, closeAll, connectOptsFor, disconnectServer, getServer, isBuiltinServer, isConnected, listServerConfigs, removeServer, updateServerConfig, type ServerConfig } from './servers.ts';
-import { benchmark, runQuery, serializeCell, type Engine } from './engines.ts';
+import { benchmark, runQuery, serializeCell, type Engine, type QueryTxOptions } from './engines.ts';
 import { featuresFor, tryFeature } from './features.ts';
 import { runCustomBench, type CustomBenchRequest } from './custom-bench.ts';
 
@@ -131,9 +131,16 @@ app.get('/api/servers/:id/info', async (req) => {
 
 app.post('/api/servers/:id/query', async (req) => {
   const { id } = req.params as { id: string };
-  const { sql, params, engine, txWait } = req.body as { sql: string; params?: unknown[]; engine: Engine; txWait?: boolean | number };
+  const { sql, params, engine, txWait, txOptions } = req.body as {
+    sql: string;
+    params?: unknown[];
+    engine: Engine;
+    /** Legacy shape (lock wait only) — still honored. */
+    txWait?: boolean | number;
+    txOptions?: QueryTxOptions;
+  };
   const state = await getServer(id);
-  return runQuery(state, engine, sql, params ?? [], txWait);
+  return runQuery(state, engine, sql, params ?? [], txOptions ?? (txWait !== undefined ? { wait: txWait } : undefined));
 });
 
 // ── Script runner: multi-statement scripts with driver-side client commands ──
@@ -147,12 +154,26 @@ app.post('/api/servers/:id/script', async (req, reply) => {
     transaction?: 'perScript' | 'perStatement' | 'none';
     clientCommands?: 'process' | 'error';
     continueOnError?: boolean;
+    /** Lock wait for the script's transactions. Demo default: 10 s — DDL
+     * blocked by another connection fails with a clear lock error instead of
+     * hanging forever (the driver default is Firebird's wait-forever). */
+    lockWait?: boolean | number;
   };
   if (!body?.script?.trim()) {
     reply.code(400);
     return { error: 'script is empty' };
   }
   const state = await getServer(id);
+  // Release the demo's own metadata pins before the script runs: cached
+  // prepared statements in the SQL-runner lanes (core pool, drizzle
+  // attachment, compat pool) pin table metadata, which would block script
+  // DDL like `recreate table`. Same dance the benchmark does.
+  await state.pool.clearStatementCaches().catch(() => void 0);
+  await state.drizzleAtt.clearStatementCache().catch(() => void 0);
+  await state.ext.stopPool().catch(() => void 0);
+  const mode = ['perScript', 'perStatement', 'none'].includes(body.transaction as string)
+    ? body.transaction!
+    : ('perScript' as const);
   const att = await connect(connectOptsFor(state.config));
   const trace: unknown[] = [];
   try {
@@ -161,9 +182,9 @@ app.post('/api/servers/:id/script', async (req, reply) => {
     let counts = { succeeded: 0, failed: 0 };
     try {
       const result = await att.executeScript(body.script, {
-        transaction: ['perScript', 'perStatement', 'none'].includes(body.transaction as string)
-          ? body.transaction
-          : 'perScript',
+        transaction: mode,
+        // 'none' rejects transactionOptions by contract (defaultTransaction's job).
+        ...(mode === 'none' ? {} : { transactionOptions: { wait: body.lockWait ?? 10 } }),
         clientCommands: body.clientCommands === 'error' ? 'error' : 'process',
         continueOnError: !!body.continueOnError,
         onProgress: (r, total) => {

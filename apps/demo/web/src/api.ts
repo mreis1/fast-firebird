@@ -25,6 +25,15 @@ export interface ServerCfg {
 /** Lock-wait mode: undefined = engine default, true = wait, false = nowait, number = wait seconds. */
 export type TxWait = boolean | number | undefined;
 
+export type TxIsolation = 'snapshot' | 'serializable' | 'readCommitted' | 'readCommittedNoRecVersion';
+
+/** Transaction options for the core lane (undefined field = driver default). */
+export interface QueryTxOptions {
+  isolation?: TxIsolation;
+  readOnly?: boolean;
+  wait?: TxWait;
+}
+
 export interface ServerInfo {
   config: ServerCfg;
   protocolVersion: number;
@@ -157,8 +166,8 @@ export const api = {
     json<{ server: ServerCfg }>(`/api/servers/${id}/config`, patch),
   disconnectServer: (id: string) => json<{ id: string; connected: boolean }>(`/api/servers/${id}/disconnect`, {}),
   info: (id: string) => json<ServerInfo>(`/api/servers/${id}/info`),
-  query: (id: string, engine: Engine, sql: string, params: unknown[], txWait?: TxWait) =>
-    json<QueryResult>(`/api/servers/${id}/query`, { engine, sql, params, txWait }),
+  query: (id: string, engine: Engine, sql: string, params: unknown[], txOptions?: QueryTxOptions) =>
+    json<QueryResult>(`/api/servers/${id}/query`, { engine, sql, params, txOptions }),
   benchmark: (id: string, n: number) => json<{ n: number; lanes: BenchLane[] }>(`/api/servers/${id}/benchmark`, { n }),
   emit: (id: string, name: string) => json<{ emitted: string }>(`/api/servers/${id}/emit`, { name }),
   blob: (id: string) => json<{ note: string; binary: unknown }>(`/api/servers/${id}/blob`, {}),
@@ -166,8 +175,8 @@ export const api = {
   tryFeature: (id: string, setup: string[], sql: string) => json<TryResult>(`/api/servers/${id}/try-feature`, { setup, sql }),
   customBench: (id: string, columns: BenchColumnDef[], rows: number, ddlWait?: TxWait, fetchConnections?: number) =>
     json<CustomBenchResult>(`/api/servers/${id}/custom-bench`, { columns, rows, ddlWait, fetchConnections }),
-  script: (id: string, script: string, transaction: ScriptTxMode, clientCommands: 'process' | 'error', continueOnError: boolean) =>
-    json<ScriptRunResult>(`/api/servers/${id}/script`, { script, transaction, clientCommands, continueOnError }),
+  script: (id: string, script: string, transaction: ScriptTxMode, clientCommands: 'process' | 'error', continueOnError: boolean, lockWait?: TxWait) =>
+    json<ScriptRunResult>(`/api/servers/${id}/script`, { script, transaction, clientCommands, continueOnError, lockWait }),
 };
 
 /**
